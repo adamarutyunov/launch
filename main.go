@@ -7,6 +7,7 @@ import (
 
 	"github.com/adam/launch/internal/config"
 	"github.com/adam/launch/internal/process"
+	"github.com/adam/launch/internal/state"
 	"github.com/adam/launch/internal/ui"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -29,7 +30,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	manager := process.NewManager()
+	manager := process.NewManager(absDir)
 
 	for _, group := range groups {
 		for _, namedProc := range group.Processes {
@@ -37,13 +38,18 @@ func main() {
 			if namedProc.Process.WorkingDir != nil {
 				workingDir = *namedProc.Process.WorkingDir
 			}
+			logFile := state.LogFilePath(absDir, group.Name, namedProc.Slug)
 			managed := process.NewManagedProcess(
-				namedProc.Name,
+				namedProc.Slug,
+				namedProc.Process.Title,
 				group.Name,
 				namedProc.Process.Command,
 				workingDir,
 				namedProc.Process.Env,
 				namedProc.Process.AutoStart,
+				namedProc.Process.DependsOn,
+				namedProc.Process.ReadyCheck,
+				logFile,
 			)
 			manager.Add(managed)
 		}
@@ -56,14 +62,31 @@ func main() {
 
 	model := ui.NewModel(manager, title)
 	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
-
-	// Set program reference before Run so Init() and processes can use it
 	manager.Program = program
 
-	if _, err := program.Run(); err != nil {
+	session, err := state.Load(absDir)
+	if err == nil && len(session.Processes) > 0 {
+		manager.ReattachFromState(session)
+	}
+
+	finalModel, err := program.Run()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 		os.Exit(1)
 	}
 
-	manager.StopAll()
+	if m, ok := finalModel.(ui.Model); ok {
+		switch m.ExitMode {
+		case ui.ExitDetach:
+			if err := manager.SaveState(); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to save state: %s\n", err)
+			}
+			fmt.Println("Detached. Processes are still running. Run 'launch' again to reattach.")
+		case ui.ExitKill:
+			manager.StopAll()
+			fmt.Println("All processes stopped.")
+		}
+	} else {
+		manager.StopAll()
+	}
 }

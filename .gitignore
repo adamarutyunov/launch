@@ -1,3 +1,2 @@
 launch
-*.yml
-!solo.yml.example
+test_config.yml
