@@ -87,6 +87,7 @@ type Model struct {
 	title             string
 	multiGroup        bool
 	ExitMode          ExitMode
+	Reattached        bool
 	alert             string
 	alertExpiry       time.Time
 }
@@ -133,6 +134,9 @@ func (m *Model) setAlert(text string) tea.Cmd {
 type clearAlertMsg struct{}
 
 func (m Model) Init() tea.Cmd {
+	if m.Reattached {
+		return nil
+	}
 	return func() tea.Msg {
 		m.manager.StartAutoStart()
 		return nil

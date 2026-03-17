@@ -8,7 +8,16 @@ Terminal process manager with tree-grouped sidebar, log streaming, health checks
 git clone https://github.com/adamarutyunov/launch.git ~/launch
 cd ~/launch
 go build -o launch .
-ln -sf ~/launch/launch /opt/homebrew/bin/launch
+```
+
+Add `~/launch` to your `PATH`. For example, in `~/.zshrc` or `~/.config/fish/config.fish`:
+
+```bash
+# .zshrc / .bashrc
+export PATH="$HOME/launch:$PATH"
+
+# config.fish
+fish_add_path ~/launch
 ```
 
 After making changes, rebuild:
@@ -16,8 +25,6 @@ After making changes, rebuild:
 ```bash
 cd ~/launch && go build -o launch .
 ```
-
-The symlink means `launch` is available globally — no re-linking needed after rebuilds.
 
 ## Usage
 

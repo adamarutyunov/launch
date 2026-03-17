@@ -61,11 +61,15 @@ func main() {
 	}
 
 	model := ui.NewModel(manager, title)
+
+	session, err := state.Load(absDir)
+	reattached := err == nil && len(session.Processes) > 0
+	model.Reattached = reattached
+
 	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	manager.Program = program
 
-	session, err := state.Load(absDir)
-	if err == nil && len(session.Processes) > 0 {
+	if reattached {
 		manager.ReattachFromState(session)
 	}
 
