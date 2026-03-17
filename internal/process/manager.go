@@ -226,6 +226,7 @@ func (p *ManagedProcess) Start(program *tea.Program) error {
 		cmd.Dir = p.WorkingDir
 	}
 	cmd.Env = os.Environ()
+	cmd.Env = append(cmd.Env, "FORCE_COLOR=1", "CLICOLOR_FORCE=1", "TERM=xterm-256color")
 	for k, v := range p.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
