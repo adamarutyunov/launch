@@ -555,7 +555,7 @@ func (m *Manager) Get(group, slug string) *ManagedProcess {
 	return m.byKey[group+"/"+slug]
 }
 
-func (m *Manager) BuildSidebar() {
+func (m *Manager) BuildSidebar(collapsedGroups map[string]bool) {
 	m.Sidebar = nil
 	seenGroups := make(map[string]bool)
 	var orderedGroups []string
@@ -573,6 +573,9 @@ func (m *Manager) BuildSidebar() {
 	for _, group := range orderedGroups {
 		if multiGroup {
 			m.Sidebar = append(m.Sidebar, SidebarEntry{IsGroup: true, Group: group})
+		}
+		if collapsedGroups[group] {
+			continue
 		}
 		for _, proc := range m.Processes {
 			if proc.Group == group {

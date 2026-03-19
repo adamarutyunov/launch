@@ -60,18 +60,16 @@ func main() {
 		title = groups[0].Name
 	}
 
-	model := ui.NewModel(manager, title)
+	settings := state.LoadSettings(absDir)
+	model := ui.NewModel(manager, title, settings)
 
 	session, err := state.Load(absDir)
-	reattached := err == nil && len(session.Processes) > 0
-	model.Reattached = reattached
+	if err == nil && len(session.Processes) > 0 {
+		model.SavedSession = session
+	}
 
 	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	manager.Program = program
-
-	if reattached {
-		manager.ReattachFromState(session)
-	}
 
 	finalModel, err := program.Run()
 	if err != nil {

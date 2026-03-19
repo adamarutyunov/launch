@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/adam/launch/internal/process"
+	"github.com/adam/launch/internal/state"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -87,13 +88,15 @@ type Model struct {
 	title             string
 	multiGroup        bool
 	ExitMode          ExitMode
-	Reattached        bool
+	SavedSession      *state.SessionState
+	collapsedGroups   map[string]bool
 	alert             string
 	alertExpiry       time.Time
 }
 
-func NewModel(manager *process.Manager, title string) Model {
-	manager.BuildSidebar()
+func NewModel(manager *process.Manager, title string, settings *state.UserSettings) Model {
+	collapsedGroups := settings.CollapsedGroups
+	manager.BuildSidebar(collapsedGroups)
 	selectable := manager.SelectableIndices()
 
 	return Model{
@@ -104,6 +107,7 @@ func NewModel(manager *process.Manager, title string) Model {
 		title:             title,
 		multiGroup:        len(manager.Groups) > 1,
 		ExitMode:          ExitDetach,
+		collapsedGroups:   collapsedGroups,
 	}
 }
 
@@ -123,6 +127,38 @@ func (m Model) selectedProcess() *process.ManagedProcess {
 	return entry.Process
 }
 
+func (m *Model) rebuildSidebar() {
+	selectedGroup := ""
+	if entry := m.selectedEntry(); entry != nil {
+		selectedGroup = entry.Group
+	}
+	m.manager.BuildSidebar(m.collapsedGroups)
+	m.selectableIndices = m.manager.SelectableIndices()
+
+	// Try to select the group header after collapse
+	if selectedGroup != "" {
+		for i, idx := range m.selectableIndices {
+			entry := m.manager.Sidebar[idx]
+			if entry.IsGroup && entry.Group == selectedGroup {
+				m.selectedIndex = i
+				break
+			}
+		}
+	}
+	if m.selectedIndex >= len(m.selectableIndices) {
+		m.selectedIndex = len(m.selectableIndices) - 1
+	}
+	if m.selectedIndex < 0 {
+		m.selectedIndex = 0
+	}
+}
+
+func (m *Model) saveSettings() {
+	go state.SaveSettings(m.manager.RootDir, &state.UserSettings{
+		CollapsedGroups: m.collapsedGroups,
+	})
+}
+
 func (m *Model) setAlert(text string) tea.Cmd {
 	m.alert = text
 	m.alertExpiry = time.Now().Add(5 * time.Second)
@@ -134,11 +170,12 @@ func (m *Model) setAlert(text string) tea.Cmd {
 type clearAlertMsg struct{}
 
 func (m Model) Init() tea.Cmd {
-	if m.Reattached {
-		return nil
-	}
 	return func() tea.Msg {
-		m.manager.StartAutoStart()
+		if m.SavedSession != nil {
+			m.manager.ReattachFromState(m.SavedSession)
+		} else {
+			m.manager.StartAutoStart()
+		}
 		return nil
 	}
 }
@@ -182,6 +219,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "Q", "ctrl+c":
 			m.ExitMode = ExitKill
 			return m, tea.Quit
+
+		case "enter":
+			if !m.multiGroup {
+				return m, nil
+			}
+			entry := m.selectedEntry()
+			if entry == nil || !entry.IsGroup {
+				return m, nil
+			}
+			group := entry.Group
+			m.collapsedGroups[group] = !m.collapsedGroups[group]
+			m.rebuildSidebar()
+			m.updateViewportContent()
+			m.saveSettings()
+			return m, nil
 
 		case "j", "down":
 			if m.selectedIndex < len(m.selectableIndices)-1 {
@@ -428,7 +480,11 @@ func (m Model) renderSidebar() string {
 				items = append(items, "")
 			}
 			count := m.manager.RunningInGroup(entry.Group)
-			label := fmt.Sprintf("▸ %s (%s)", entry.Group, count)
+			chevron := "▾"
+			if m.collapsedGroups[entry.Group] {
+				chevron = "▸"
+			}
+			label := fmt.Sprintf("%s %s (%s)", chevron, entry.Group, count)
 			if i == selectedSidebarIdx {
 				label = selectedItemStyle.Bold(true).Foreground(colorGroup).Render(label)
 			} else {
@@ -520,7 +576,7 @@ func (m Model) renderLogPane() string {
 }
 
 func (m Model) renderFooter() string {
-	help := "  ↑/↓ select • s/space start/stop • A start all • S stop all • r restart • c clear • q detach • Q kill all and quit"
+	help := "  ↑/↓ select • enter collapse • s start/stop • A start all • S stop all • r restart • c clear • q detach • Q quit"
 	summary := m.manager.Summary()
 
 	left := helpStyle.Render(help)
