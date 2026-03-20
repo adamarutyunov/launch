@@ -53,15 +53,20 @@ func main() {
 			)
 			manager.Add(managed)
 		}
-	}
-
-	title := filepath.Base(absDir)
-	if len(groups) == 1 {
-		title = groups[0].Name
+		for _, namedTask := range group.Tasks {
+			managed := process.NewManagedTask(
+				namedTask.Slug,
+				namedTask.Title,
+				group.Name,
+				namedTask.Command,
+				namedTask.WorkingDir,
+			)
+			manager.AddTask(managed)
+		}
 	}
 
 	settings := state.LoadSettings(absDir)
-	model := ui.NewModel(manager, title, settings)
+	model := ui.NewModel(manager, "Launch "+Version, settings)
 
 	session, err := state.Load(absDir)
 	if err == nil && len(session.Processes) > 0 {

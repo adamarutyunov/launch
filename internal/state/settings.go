@@ -9,6 +9,7 @@ import (
 
 type UserSettings struct {
 	CollapsedGroups map[string]bool `json:"collapsed_groups,omitempty"`
+	HiddenTasks     map[string]bool `json:"hidden_tasks,omitempty"`
 }
 
 func SettingsFilePath(rootDir string) string {
@@ -27,6 +28,9 @@ func LoadSettings(rootDir string) *UserSettings {
 	}
 	if settings.CollapsedGroups == nil {
 		settings.CollapsedGroups = make(map[string]bool)
+	}
+	if settings.HiddenTasks == nil {
+		settings.HiddenTasks = make(map[string]bool)
 	}
 	return &settings
 }

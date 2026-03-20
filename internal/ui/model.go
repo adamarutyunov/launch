@@ -15,15 +15,24 @@ import (
 var (
 	sidebarWidth = 32
 
-	colorRunning  = lipgloss.Color("#22c55e")
-	colorStarting = lipgloss.Color("#f59e0b")
-	colorQueued   = lipgloss.Color("#a1a1aa")
-	colorStopped  = lipgloss.Color("#71717a")
-	colorCrashed  = lipgloss.Color("#ef4444")
-	colorDim      = lipgloss.Color("#52525b")
-	colorBorder   = lipgloss.Color("#3f3f46")
-	colorGroup    = lipgloss.Color("#a1a1aa")
-	colorAlert    = lipgloss.Color("#f59e0b")
+	// ANSI 16-color palette — adapts to terminal theme (dark/light).
+	colorRunning     = lipgloss.Color("10") // bright green
+	colorTaskRunning = lipgloss.Color("14") // bright cyan (task in-progress)
+	colorStarting    = lipgloss.Color("3")  // yellow
+	colorQueued      = lipgloss.Color("8")  // dark grey
+	colorStopped     = lipgloss.Color("8")  // dark grey
+	colorCrashed     = lipgloss.Color("9")  // bright red
+	colorSucceeded   = lipgloss.Color("10") // bright green
+	colorFailed      = lipgloss.Color("9")  // bright red
+	colorDim         = lipgloss.Color("8")  // dark grey
+	colorBorder      = lipgloss.Color("8")  // dark grey
+	// colorGroup is adaptive: light-grey on dark terminals, dark-grey on light ones.
+	colorGroup = lipgloss.AdaptiveColor{Dark: "7", Light: "8"}
+	colorAlert       = lipgloss.Color("3")  // yellow
+
+	// Adaptive selection background: dark on dark themes, light on light themes.
+	// Adaptive selection background.
+	colorSelectedBg = lipgloss.AdaptiveColor{Dark: "#27272a", Light: "#d4d4d8"}
 
 	sidebarStyle = lipgloss.NewStyle().
 			Width(sidebarWidth).
@@ -33,7 +42,7 @@ var (
 			Padding(1, 0)
 
 	selectedItemStyle = lipgloss.NewStyle().
-				Background(lipgloss.Color("#27272a")).
+				Background(colorSelectedBg).
 				Width(sidebarWidth - 2).
 				Padding(0, 1)
 
@@ -44,6 +53,11 @@ var (
 	groupHeaderStyle = lipgloss.NewStyle().
 				Foreground(colorGroup).
 				Bold(true).
+				Width(sidebarWidth - 2).
+				Padding(0, 1)
+
+	sectionHeaderStyle = lipgloss.NewStyle().
+				Foreground(colorDim).
 				Width(sidebarWidth - 2).
 				Padding(0, 1)
 
@@ -90,13 +104,16 @@ type Model struct {
 	ExitMode          ExitMode
 	SavedSession      *state.SessionState
 	collapsedGroups   map[string]bool
+	hiddenTasks       map[string]bool
+	showHiddenTasks   bool
 	alert             string
 	alertExpiry       time.Time
 }
 
 func NewModel(manager *process.Manager, title string, settings *state.UserSettings) Model {
 	collapsedGroups := settings.CollapsedGroups
-	manager.BuildSidebar(collapsedGroups)
+	hiddenTasks := settings.HiddenTasks
+	manager.BuildSidebar(collapsedGroups, hiddenTasks, false)
 	selectable := manager.SelectableIndices()
 
 	return Model{
@@ -108,6 +125,7 @@ func NewModel(manager *process.Manager, title string, settings *state.UserSettin
 		multiGroup:        len(manager.Groups) > 1,
 		ExitMode:          ExitDetach,
 		collapsedGroups:   collapsedGroups,
+		hiddenTasks:       hiddenTasks,
 	}
 }
 
@@ -119,31 +137,48 @@ func (m Model) selectedEntry() *process.SidebarEntry {
 	return &m.manager.Sidebar[sidebarIdx]
 }
 
-func (m Model) selectedProcess() *process.ManagedProcess {
-	entry := m.selectedEntry()
-	if entry == nil || entry.IsGroup {
-		return nil
-	}
-	return entry.Process
-}
-
 func (m *Model) rebuildSidebar() {
-	selectedGroup := ""
+	// Save identity of the currently selected entry so we can restore it.
+	previousIndex := m.selectedIndex
+	selectedIsGroup := false
+	selectedGroupName := ""
+	selectedItemKey := ""
 	if entry := m.selectedEntry(); entry != nil {
-		selectedGroup = entry.Group
+		selectedIsGroup = entry.IsGroup
+		selectedGroupName = entry.Group
+		if !entry.IsGroup && entry.Item != nil {
+			selectedItemKey = entry.Item.GetGroup() + "/" + entry.Item.GetSlug()
+		}
 	}
-	m.manager.BuildSidebar(m.collapsedGroups)
+
+	m.manager.BuildSidebar(m.collapsedGroups, m.hiddenTasks, m.showHiddenTasks)
 	m.selectableIndices = m.manager.SelectableIndices()
 
-	// Try to select the group header after collapse
-	if selectedGroup != "" {
-		for i, idx := range m.selectableIndices {
-			entry := m.manager.Sidebar[idx]
-			if entry.IsGroup && entry.Group == selectedGroup {
+	// Try to find the exact same entry.
+	found := false
+	for i, idx := range m.selectableIndices {
+		entry := m.manager.Sidebar[idx]
+		if selectedIsGroup {
+			if entry.IsGroup && entry.Group == selectedGroupName {
 				m.selectedIndex = i
+				found = true
 				break
 			}
+		} else if selectedItemKey != "" {
+			if !entry.IsGroup && entry.Item != nil {
+				if entry.Item.GetGroup()+"/"+entry.Item.GetSlug() == selectedItemKey {
+					m.selectedIndex = i
+					found = true
+					break
+				}
+			}
 		}
+	}
+
+	// If the item is gone (hidden), keep the same numeric position so the
+	// cursor stays near where it was rather than jumping to the top.
+	if !found {
+		m.selectedIndex = previousIndex
 	}
 	if m.selectedIndex >= len(m.selectableIndices) {
 		m.selectedIndex = len(m.selectableIndices) - 1
@@ -156,6 +191,7 @@ func (m *Model) rebuildSidebar() {
 func (m *Model) saveSettings() {
 	go state.SaveSettings(m.manager.RootDir, &state.UserSettings{
 		CollapsedGroups: m.collapsedGroups,
+		HiddenTasks:     m.hiddenTasks,
 	})
 }
 
@@ -251,6 +287,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
+		case "h":
+			entry := m.selectedEntry()
+			if entry == nil || entry.IsGroup || entry.Item == nil {
+				return m, nil
+			}
+			if entry.Item.Kind() != process.KindTask {
+				return m, nil
+			}
+			taskKey := entry.Item.GetGroup() + "/" + entry.Item.GetSlug()
+			m.hiddenTasks[taskKey] = !m.hiddenTasks[taskKey]
+			m.rebuildSidebar()
+			m.updateViewportContent()
+			m.saveSettings()
+			return m, nil
+
+		case "H":
+			m.showHiddenTasks = !m.showHiddenTasks
+			m.rebuildSidebar()
+			m.updateViewportContent()
+			return m, nil
+
 		case " ", "s":
 			entry := m.selectedEntry()
 			if entry == nil {
@@ -260,11 +317,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if entry.IsGroup {
 				group := entry.Group
 				return m, func() tea.Msg {
-					procs := manager.ProcessesInGroup(group)
-					// If any are running, stop all. Otherwise start all.
+					items := manager.ItemsInGroup(group)
 					anyUp := false
-					for _, p := range procs {
-						if p.Status().IsUp() {
+					for _, item := range items {
+						if item.GetStatus().IsUp() {
 							anyUp = true
 							break
 						}
@@ -272,20 +328,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if anyUp {
 						manager.StopGroup(group)
 					} else {
-						manager.StartBatch(procs)
+						manager.StartGroup(group)
 					}
 					return nil
 				}
 			}
-			proc := entry.Process
-			manager2 := m.manager
+			item := entry.Item
 			return m, func() tea.Msg {
-				status := proc.Status()
-				if status.IsUp() || status == process.StatusCrashed || status == process.StatusQueued {
-					_ = proc.Stop()
+				status := item.GetStatus()
+				if status.IsUp() {
+					_ = item.Stop()
 					return nil
 				}
-				manager2.StartBatch([]*process.ManagedProcess{proc})
+				switch concrete := item.(type) {
+				case *process.ManagedProcess:
+					if status == process.StatusCrashed || status == process.StatusQueued {
+						_ = concrete.Stop()
+						return nil
+					}
+					manager.StartBatch([]*process.ManagedProcess{concrete})
+				case *process.ManagedTask:
+					_ = concrete.Start(manager.Program)
+				}
 				return nil
 			}
 
@@ -299,6 +363,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "A":
 			manager := m.manager
 			return m, func() tea.Msg {
+				for _, task := range manager.Tasks {
+					if !task.GetStatus().IsUp() {
+						_ = task.Start(manager.Program)
+					}
+				}
 				manager.StartBatch(manager.Processes)
 				return nil
 			}
@@ -314,24 +383,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, func() tea.Msg {
 					manager.StopGroup(group)
 					time.Sleep(500 * time.Millisecond)
-					manager.StartBatch(manager.ProcessesInGroup(group))
+					manager.StartGroup(group)
 					return nil
 				}
 			}
-			proc := entry.Process
+			item := entry.Item
 			return m, func() tea.Msg {
-				_ = proc.Stop()
+				_ = item.Stop()
 				time.Sleep(500 * time.Millisecond)
-				manager.StartBatch([]*process.ManagedProcess{proc})
+				switch concrete := item.(type) {
+				case *process.ManagedProcess:
+					manager.StartBatch([]*process.ManagedProcess{concrete})
+				case *process.ManagedTask:
+					_ = concrete.Start(manager.Program)
+				}
 				return nil
 			}
 
 		case "c":
-			proc := m.selectedProcess()
-			if proc == nil {
+			entry := m.selectedEntry()
+			if entry == nil || entry.IsGroup {
 				return m, nil
 			}
-			proc.ClearLogs()
+			entry.Item.ClearLogs()
 			m.updateViewportContent()
 			return m, nil
 
@@ -360,18 +434,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case process.LogMsg:
 		entry := m.selectedEntry()
-		if entry == nil {
+		if entry == nil || entry.IsGroup {
 			return m, nil
 		}
-		if entry.IsGroup {
-			// No live log streaming for group view
-		} else if entry.Process.Slug == msg.ProcessSlug && entry.Process.Group == msg.Group {
+		if entry.Item.GetSlug() == msg.ProcessSlug && entry.Item.GetGroup() == msg.Group {
 			m.updateViewportContent()
 		}
 		return m, nil
 
 	case process.StatusChangeMsg:
-		// Refresh group summary if a group is selected
 		entry := m.selectedEntry()
 		if entry != nil && entry.IsGroup {
 			m.updateViewportContent()
@@ -403,32 +474,37 @@ func (m *Model) updateViewportContent() {
 	}
 
 	if entry.IsGroup {
-		// Show group summary
 		var content strings.Builder
-		procs := m.manager.ProcessesInGroup(entry.Group)
-		for _, proc := range procs {
-			status := proc.Status()
+		items := m.manager.ItemsInGroup(entry.Group)
+		for _, item := range items {
+			status := item.GetStatus()
 			var marker string
-			switch status {
-			case process.StatusRunning:
-				marker = "●"
-			case process.StatusStarting:
-				marker = "◐"
-			case process.StatusQueued:
-				marker = "◔"
-			case process.StatusCrashed:
-				marker = "✕"
+			switch {
+			case status == process.StatusRunning && item.Kind() == process.KindTask:
+				marker = lipgloss.NewStyle().Foreground(colorTaskRunning).Render("●")
+			case status == process.StatusRunning:
+				marker = lipgloss.NewStyle().Foreground(colorRunning).Render("●")
+			case item.Kind() == process.KindProcess && status == process.StatusStarting:
+				marker = lipgloss.NewStyle().Foreground(colorStarting).Render("◐")
+			case item.Kind() == process.KindProcess && status == process.StatusQueued:
+				marker = lipgloss.NewStyle().Foreground(colorQueued).Render("◔")
+			case item.Kind() == process.KindProcess && status == process.StatusCrashed:
+				marker = lipgloss.NewStyle().Foreground(colorCrashed).Render("✕")
+			case status == process.StatusSucceeded:
+				marker = lipgloss.NewStyle().Foreground(colorSucceeded).Render("●")
+			case status == process.StatusFailed:
+				marker = lipgloss.NewStyle().Foreground(colorFailed).Render("✕")
 			default:
-				marker = "○"
+				marker = lipgloss.NewStyle().Foreground(colorStopped).Render("○")
 			}
-			content.WriteString(fmt.Sprintf("  %s  %-24s %s\n", marker, proc.Title, status))
+			content.WriteString(fmt.Sprintf("  %s  %-24s %s\n", marker, item.GetTitle(), status))
 		}
 		m.viewport.SetContent(content.String())
 		return
 	}
 
-	proc := entry.Process
-	logs := proc.Logs()
+	item := entry.Item
+	logs := item.GetLogs()
 	var content strings.Builder
 	for _, line := range logs {
 		if line.IsSystem {
@@ -439,7 +515,6 @@ func (m *Model) updateViewportContent() {
 		content.WriteString("\n")
 	}
 
-	// Preserve scroll position when user has scrolled up
 	previousYOffset := m.viewport.YOffset
 	m.viewport.SetContent(content.String())
 	if m.autoScroll {
@@ -462,6 +537,46 @@ func (m Model) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, main, footer)
 }
 
+// dot renders a status indicator with an optional background color.
+// bg should be nil for normal (unselected) items and colorSelectedBg for selected ones.
+// Setting bg on the dot prevents the ANSI reset inside the dot from revealing the
+// terminal's default background (white on light themes) mid-row.
+func dot(fg lipgloss.TerminalColor, char string, bg *lipgloss.AdaptiveColor) string {
+	s := lipgloss.NewStyle().Foreground(fg)
+	if bg != nil {
+		s = s.Background(*bg)
+	}
+	return s.Render(char)
+}
+
+func taskDot(status process.Status, bg *lipgloss.AdaptiveColor) string {
+	switch status {
+	case process.StatusRunning:
+		return dot(colorTaskRunning, "●", bg)
+	case process.StatusSucceeded:
+		return dot(colorSucceeded, "●", bg)
+	case process.StatusFailed:
+		return dot(colorFailed, "●", bg)
+	default:
+		return dot(colorStopped, "○", bg)
+	}
+}
+
+func processDot(status process.Status, bg *lipgloss.AdaptiveColor) string {
+	switch status {
+	case process.StatusRunning:
+		return dot(colorRunning, "●", bg)
+	case process.StatusStarting:
+		return dot(colorStarting, "◐", bg)
+	case process.StatusQueued:
+		return dot(colorQueued, "◔", bg)
+	case process.StatusCrashed:
+		return dot(colorCrashed, "●", bg)
+	default:
+		return dot(colorStopped, "○", bg)
+	}
+}
+
 func (m Model) renderSidebar() string {
 	var items []string
 
@@ -474,8 +589,18 @@ func (m Model) renderSidebar() string {
 	}
 
 	for i, entry := range m.manager.Sidebar {
+		if entry.IsSectionHeader {
+			items = append(items, "") // blank line above Tasks
+			prefix := "  "
+			if m.multiGroup {
+				prefix = "    "
+			}
+			label := sectionHeaderStyle.Render(prefix + "Tasks")
+			items = append(items, label)
+			continue
+		}
+
 		if entry.IsGroup {
-			// Add spacing before group headers (except the first)
 			if i > 0 {
 				items = append(items, "")
 			}
@@ -494,32 +619,51 @@ func (m Model) renderSidebar() string {
 			continue
 		}
 
-		proc := entry.Process
-		status := proc.Status()
-		var dot string
-		switch status {
-		case process.StatusRunning:
-			dot = lipgloss.NewStyle().Foreground(colorRunning).Render("●")
-		case process.StatusStarting:
-			dot = lipgloss.NewStyle().Foreground(colorStarting).Render("◐")
-		case process.StatusQueued:
-			dot = lipgloss.NewStyle().Foreground(colorQueued).Render("◔")
-		case process.StatusCrashed:
-			dot = lipgloss.NewStyle().Foreground(colorCrashed).Render("●")
-		default:
-			dot = lipgloss.NewStyle().Foreground(colorStopped).Render("○")
-		}
+		item := entry.Item
+		status := item.GetStatus()
 
 		prefix := "  "
 		if m.multiGroup {
 			prefix = "    "
 		}
-		label := fmt.Sprintf("%s%s %s", prefix, dot, proc.Title)
 
-		if i == selectedSidebarIdx {
-			label = selectedItemStyle.Render(label)
+		var label string
+		if entry.Hidden {
+			// Hidden tasks: always dim, plain dot so no inner ANSI resets.
+			dimLabel := fmt.Sprintf("%s○ %s", prefix, item.GetTitle())
+			if i == selectedSidebarIdx {
+				label = selectedItemStyle.Foreground(colorDim).Render(dimLabel)
+			} else {
+				label = normalItemStyle.Foreground(colorDim).Render(dimLabel)
+			}
+		} else if i == selectedSidebarIdx {
+			// Selected item: every piece carries the selection background so that
+			// the ANSI reset inside the dot character never reveals the bare
+			// terminal background (white on light themes) between dot and title.
+			bg := colorSelectedBg
+			var d string
+			if item.Kind() == process.KindTask {
+				d = taskDot(status, &bg)
+			} else {
+				d = processDot(status, &bg)
+			}
+			// " "+prefix mirrors the Padding(0,1) left-pad that normalItemStyle adds.
+			selStyle := lipgloss.NewStyle().Background(bg)
+			row := selStyle.Render(" "+prefix) + d + selStyle.Render(" "+item.GetTitle())
+			// Pad the row to the full sidebar item width.
+			totalWidth := sidebarWidth - 2
+			if vis := lipgloss.Width(row); vis < totalWidth {
+				row += selStyle.Render(strings.Repeat(" ", totalWidth-vis))
+			}
+			label = row
 		} else {
-			label = normalItemStyle.Render(label)
+			var d string
+			if item.Kind() == process.KindTask {
+				d = taskDot(status, nil)
+			} else {
+				d = processDot(status, nil)
+			}
+			label = normalItemStyle.Render(fmt.Sprintf("%s%s %s", prefix, d, item.GetTitle()))
 		}
 
 		items = append(items, label)
@@ -541,42 +685,74 @@ func (m Model) renderLogPane() string {
 		header = logHeaderStyle.Render(
 			fmt.Sprintf("%s — %s", entry.Group, count))
 	} else {
-		proc := entry.Process
-		status := proc.Status()
+		item := entry.Item
+		status := item.GetStatus()
 		var statusText string
-		switch status {
-		case process.StatusRunning:
-			statusText = lipgloss.NewStyle().Foreground(colorRunning).Render("running")
-		case process.StatusStarting:
-			statusText = lipgloss.NewStyle().Foreground(colorStarting).Render("starting...")
-		case process.StatusQueued:
-			statusText = lipgloss.NewStyle().Foreground(colorQueued).Render("queued")
-		case process.StatusCrashed:
-			statusText = lipgloss.NewStyle().Foreground(colorCrashed).Render(
-				fmt.Sprintf("crashed (exit %d)", proc.ExitCode()))
-		default:
-			statusText = lipgloss.NewStyle().Foreground(colorStopped).Render("stopped")
+
+		if item.Kind() == process.KindTask {
+			switch status {
+			case process.StatusRunning:
+				statusText = lipgloss.NewStyle().Foreground(colorTaskRunning).Render("running")
+			case process.StatusSucceeded:
+				statusText = lipgloss.NewStyle().Foreground(colorSucceeded).Render("succeeded")
+			case process.StatusFailed:
+				task := item.(*process.ManagedTask)
+				statusText = lipgloss.NewStyle().Foreground(colorFailed).Render(
+					fmt.Sprintf("failed (exit %d)", task.ExitCode()))
+			default:
+				statusText = lipgloss.NewStyle().Foreground(colorStopped).Render("stopped")
+			}
+		} else {
+			proc := item.(*process.ManagedProcess)
+			switch status {
+			case process.StatusRunning:
+				statusText = lipgloss.NewStyle().Foreground(colorRunning).Render("running")
+			case process.StatusStarting:
+				statusText = lipgloss.NewStyle().Foreground(colorStarting).Render("starting...")
+			case process.StatusQueued:
+				statusText = lipgloss.NewStyle().Foreground(colorQueued).Render("queued")
+			case process.StatusCrashed:
+				statusText = lipgloss.NewStyle().Foreground(colorCrashed).Render(
+					fmt.Sprintf("crashed (exit %d)", proc.ExitCode()))
+			default:
+				statusText = lipgloss.NewStyle().Foreground(colorStopped).Render("stopped")
+			}
 		}
 
-		headerText := proc.Title
+		headerText := item.GetTitle()
 		if m.multiGroup {
-			headerText = proc.Group + " / " + proc.Title
+			headerText = item.GetGroup() + " / " + item.GetTitle()
 		}
 
 		header = logHeaderStyle.Render(
 			fmt.Sprintf("%s — %s", headerText, statusText))
 	}
 
-	if m.alert != "" && time.Now().Before(m.alertExpiry) {
-		alertLine := alertStyle.Render("⚠ " + m.alert)
-		return lipgloss.JoinVertical(lipgloss.Left, header, alertLine, m.viewport.View())
+	// For tasks with a description, show it as a subtitle under the header.
+	var descLine string
+	if entry.Item != nil {
+		if task, ok := entry.Item.(*process.ManagedTask); ok && task.Description != "" {
+			descLine = helpStyle.Render(task.Description)
+		}
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, header, m.viewport.View())
+	var parts []string
+	parts = append(parts, header)
+	if descLine != "" {
+		parts = append(parts, descLine)
+	}
+	if m.alert != "" && time.Now().Before(m.alertExpiry) {
+		parts = append(parts, alertStyle.Render("⚠ "+m.alert))
+	}
+	parts = append(parts, m.viewport.View())
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
 func (m Model) renderFooter() string {
-	help := "  ↑/↓ select • enter collapse • s start/stop • A start all • S stop all • r restart • c clear • q detach • Q quit"
+	help := "  ↑/↓ select • enter collapse • s/space start/stop • A start all • S stop all • r restart • h hide • H show hidden • c clear • q detach • Q quit"
+	if m.showHiddenTasks {
+		help += " [showing hidden]"
+	}
 	summary := m.manager.Summary()
 
 	left := helpStyle.Render(help)
