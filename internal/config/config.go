@@ -61,16 +61,73 @@ type soloConfig struct {
 	Processes map[string]soloProcess `yaml:"processes"`
 }
 
-// Group represents a project with its processes, used for tree display.
+// Group represents a project with its processes and tasks, used for tree display.
 type Group struct {
 	Name       string
 	ConfigPath string
 	Processes  []NamedProcess
+	Tasks      []NamedTask
 }
 
 type NamedProcess struct {
 	Slug    string
 	Process LaunchProcess
+}
+
+// NamedTask represents a task discovered from a Taskfile.
+type NamedTask struct {
+	Slug       string
+	Title      string
+	Command    string // e.g. "task build"
+	WorkingDir string // absolute path to the directory containing the Taskfile
+}
+
+// taskfileTaskMinimal is the subset of a Taskfile task we care about.
+type taskfileTaskMinimal struct {
+	Desc string `yaml:"desc"`
+}
+
+// taskfileMinimal is the subset of a Taskfile we parse.
+type taskfileMinimal struct {
+	Tasks map[string]taskfileTaskMinimal `yaml:"tasks"`
+}
+
+func loadTaskfile(dir string) ([]NamedTask, error) {
+	for _, name := range []string{"Taskfile.yml", "Taskfile.yaml", "taskfile.yml", "taskfile.yaml"} {
+		path := filepath.Join(dir, name)
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("reading taskfile: %w", err)
+		}
+
+		var tf taskfileMinimal
+		if err := yaml.Unmarshal(data, &tf); err != nil {
+			return nil, fmt.Errorf("parsing taskfile: %w", err)
+		}
+
+		slugs := make([]string, 0, len(tf.Tasks))
+		for slug := range tf.Tasks {
+			slugs = append(slugs, slug)
+		}
+		sort.Strings(slugs)
+
+		var tasks []NamedTask
+		for _, slug := range slugs {
+			task := tf.Tasks[slug]
+			tasks = append(tasks, NamedTask{
+				Slug:       slug,
+				Title:      task.Desc, // may be empty
+				Command:    "task " + slug,
+				WorkingDir: dir,
+			})
+		}
+		return tasks, nil
+	}
+	return nil, nil
 }
 
 func loadLaunchConfig(path string) (*LaunchConfig, error) {
@@ -185,14 +242,23 @@ func Discover(rootDir string) ([]Group, error) {
 
 		subDir := filepath.Join(rootDir, entry.Name())
 		cfg, path, err := loadConfig(subDir)
-		if err != nil {
+		if err == nil {
+			groups = append(groups, configToGroup(cfg, path))
 			continue
 		}
-		groups = append(groups, configToGroup(cfg, path))
+
+		// No launch.yml — check for a standalone Taskfile.
+		tasks, _ := loadTaskfile(subDir)
+		if len(tasks) > 0 {
+			groups = append(groups, Group{
+				Name:  entry.Name(),
+				Tasks: tasks,
+			})
+		}
 	}
 
 	if len(groups) == 0 {
-		return nil, fmt.Errorf("no launch.yml found in %s or its subdirectories", rootDir)
+		return nil, fmt.Errorf("no launch.yml or Taskfile found in %s or its subdirectories", rootDir)
 	}
 
 	sort.Slice(groups, func(i, j int) bool {
@@ -224,6 +290,8 @@ func configToGroup(cfg *LaunchConfig, path string) Group {
 			Process: cfg.Processes[slug],
 		})
 	}
+
+	group.Tasks, _ = loadTaskfile(filepath.Dir(path))
 
 	return group
 }

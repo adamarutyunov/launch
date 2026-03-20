@@ -25,6 +25,8 @@ const (
 	StatusStarting
 	StatusRunning
 	StatusCrashed
+	StatusSucceeded // task finished with exit code 0
+	StatusFailed    // task finished with non-zero exit code
 )
 
 func (s Status) String() string {
@@ -37,6 +39,10 @@ func (s Status) String() string {
 		return "running"
 	case StatusCrashed:
 		return "crashed"
+	case StatusSucceeded:
+		return "succeeded"
+	case StatusFailed:
+		return "failed"
 	default:
 		return "stopped"
 	}
@@ -95,6 +101,24 @@ type StatusChangeMsg struct {
 type AlertMsg struct {
 	Text string
 }
+
+// GetSlug implements SidebarItem.
+func (p *ManagedProcess) GetSlug() string { return p.Slug }
+
+// GetTitle implements SidebarItem.
+func (p *ManagedProcess) GetTitle() string { return p.Title }
+
+// GetGroup implements SidebarItem.
+func (p *ManagedProcess) GetGroup() string { return p.Group }
+
+// GetStatus implements SidebarItem.
+func (p *ManagedProcess) GetStatus() Status { return p.Status() }
+
+// GetLogs implements SidebarItem.
+func (p *ManagedProcess) GetLogs() []LogLine { return p.Logs() }
+
+// Kind implements SidebarItem.
+func (p *ManagedProcess) Kind() ItemKind { return KindProcess }
 
 func NewManagedProcess(slug, title, group, command, workingDir string, env map[string]string, autoStart bool, dependsOn []string, readyCheck *config.ReadyCheck, logFile string) *ManagedProcess {
 	return &ManagedProcess{
@@ -522,15 +546,20 @@ func (p *ManagedProcess) monitorPID(program *tea.Program) {
 	}
 }
 
-// SidebarEntry represents either a group header or a process in the sidebar.
+// SidebarEntry represents a group header, section header, or item in the sidebar.
 type SidebarEntry struct {
-	IsGroup bool
-	Group   string
-	Process *ManagedProcess
+	IsGroup         bool
+	IsSectionHeader bool
+	SectionTitle    string
+	Group           string
+	Item            SidebarItem
+	Hidden          bool // task is hidden by user but showHiddenTasks is on
 }
 
 type Manager struct {
 	Processes []*ManagedProcess
+	Tasks     []*ManagedTask
+	Items     []SidebarItem
 	Groups    []string
 	Sidebar   []SidebarEntry
 	byKey     map[string]*ManagedProcess
@@ -547,23 +576,29 @@ func NewManager(rootDir string) *Manager {
 
 func (m *Manager) Add(proc *ManagedProcess) {
 	m.Processes = append(m.Processes, proc)
+	m.Items = append(m.Items, proc)
 	key := proc.Group + "/" + proc.Slug
 	m.byKey[key] = proc
+}
+
+func (m *Manager) AddTask(task *ManagedTask) {
+	m.Tasks = append(m.Tasks, task)
+	m.Items = append(m.Items, task)
 }
 
 func (m *Manager) Get(group, slug string) *ManagedProcess {
 	return m.byKey[group+"/"+slug]
 }
 
-func (m *Manager) BuildSidebar(collapsedGroups map[string]bool) {
+func (m *Manager) BuildSidebar(collapsedGroups map[string]bool, hiddenTasks map[string]bool, showHiddenTasks bool) {
 	m.Sidebar = nil
 	seenGroups := make(map[string]bool)
 	var orderedGroups []string
 
-	for _, proc := range m.Processes {
-		if !seenGroups[proc.Group] {
-			seenGroups[proc.Group] = true
-			orderedGroups = append(orderedGroups, proc.Group)
+	for _, item := range m.Items {
+		if !seenGroups[item.GetGroup()] {
+			seenGroups[item.GetGroup()] = true
+			orderedGroups = append(orderedGroups, item.GetGroup())
 		}
 	}
 	m.Groups = orderedGroups
@@ -577,19 +612,55 @@ func (m *Manager) BuildSidebar(collapsedGroups map[string]bool) {
 		if collapsedGroups[group] {
 			continue
 		}
-		for _, proc := range m.Processes {
-			if proc.Group == group {
-				m.Sidebar = append(m.Sidebar, SidebarEntry{Group: group, Process: proc})
+
+		// Check if this group has both processes and tasks (for section header).
+		hasProcesses := false
+		for _, item := range m.Items {
+			if item.GetGroup() == group && item.Kind() == KindProcess {
+				hasProcesses = true
+				break
+			}
+		}
+
+		addedTaskHeader := false
+		for _, item := range m.Items {
+			if item.GetGroup() != group {
+				continue
+			}
+			if item.Kind() == KindTask {
+				if !addedTaskHeader {
+					if hasProcesses {
+						m.Sidebar = append(m.Sidebar, SidebarEntry{
+							IsSectionHeader: true,
+							SectionTitle:    "tasks",
+							Group:           group,
+						})
+					}
+					addedTaskHeader = true
+				}
+				taskKey := group + "/" + item.GetSlug()
+				if hiddenTasks[taskKey] && !showHiddenTasks {
+					continue
+				}
+				m.Sidebar = append(m.Sidebar, SidebarEntry{
+					Group:  group,
+					Item:   item,
+					Hidden: hiddenTasks[taskKey],
+				})
+			} else {
+				m.Sidebar = append(m.Sidebar, SidebarEntry{Group: group, Item: item})
 			}
 		}
 	}
 }
 
-// SelectableIndices returns indices of all sidebar entries (groups + processes).
+// SelectableIndices returns indices of all selectable sidebar entries (groups and items, not section headers).
 func (m *Manager) SelectableIndices() []int {
 	var indices []int
-	for i := range m.Sidebar {
-		indices = append(indices, i)
+	for i, entry := range m.Sidebar {
+		if !entry.IsSectionHeader {
+			indices = append(indices, i)
+		}
 	}
 	return indices
 }
@@ -605,19 +676,51 @@ func (m *Manager) ProcessesInGroup(group string) []*ManagedProcess {
 	return result
 }
 
-// StopGroup stops all running processes in a group.
+// TasksInGroup returns all tasks belonging to a group.
+func (m *Manager) TasksInGroup(group string) []*ManagedTask {
+	var result []*ManagedTask
+	for _, task := range m.Tasks {
+		if task.Group == group {
+			result = append(result, task)
+		}
+	}
+	return result
+}
+
+// ItemsInGroup returns all sidebar items (processes and tasks) belonging to a group.
+func (m *Manager) ItemsInGroup(group string) []SidebarItem {
+	var result []SidebarItem
+	for _, item := range m.Items {
+		if item.GetGroup() == group {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+// StopGroup stops all running items in a group.
 func (m *Manager) StopGroup(group string) {
 	var wg sync.WaitGroup
-	for _, proc := range m.Processes {
-		if proc.Group == group && proc.Status().IsUp() {
+	for _, item := range m.Items {
+		if item.GetGroup() == group && item.GetStatus().IsUp() {
 			wg.Add(1)
-			go func(p *ManagedProcess) {
+			go func(i SidebarItem) {
 				defer wg.Done()
-				_ = p.Stop()
-			}(proc)
+				_ = i.Stop()
+			}(item)
 		}
 	}
 	wg.Wait()
+}
+
+// StartGroup starts all items in a group — processes via dependency-ordered batch, tasks directly.
+func (m *Manager) StartGroup(group string) {
+	for _, task := range m.Tasks {
+		if task.Group == group && !task.GetStatus().IsUp() {
+			_ = task.Start(m.Program)
+		}
+	}
+	m.StartBatch(m.ProcessesInGroup(group))
 }
 
 // CheckDependencies returns a list of unmet dependency descriptions.
@@ -852,12 +955,12 @@ func (m *Manager) SaveState() error {
 
 func (m *Manager) StopAll() {
 	var wg sync.WaitGroup
-	for _, proc := range m.Processes {
+	for _, item := range m.Items {
 		wg.Add(1)
-		go func(p *ManagedProcess) {
+		go func(i SidebarItem) {
 			defer wg.Done()
-			_ = p.Stop()
-		}(proc)
+			_ = i.Stop()
+		}(item)
 	}
 	wg.Wait()
 	_ = state.Remove(m.RootDir)
@@ -865,21 +968,21 @@ func (m *Manager) StopAll() {
 
 func (m *Manager) Summary() string {
 	running := 0
-	for _, proc := range m.Processes {
-		if proc.Status().IsUp() {
+	for _, item := range m.Items {
+		if item.GetStatus().IsUp() {
 			running++
 		}
 	}
-	return fmt.Sprintf("%d/%d running", running, len(m.Processes))
+	return fmt.Sprintf("%d/%d running", running, len(m.Items))
 }
 
 func (m *Manager) RunningInGroup(group string) string {
 	running := 0
 	total := 0
-	for _, proc := range m.Processes {
-		if proc.Group == group {
+	for _, item := range m.Items {
+		if item.GetGroup() == group {
 			total++
-			if proc.Status().IsUp() {
+			if item.GetStatus().IsUp() {
 				running++
 			}
 		}
