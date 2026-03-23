@@ -2,11 +2,11 @@ package ui
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/adam/launch/internal/process"
 	"github.com/charmbracelet/lipgloss"
+
 )
 
 const sidebarWidth = 32
@@ -119,95 +119,8 @@ func processDot(status process.Status, bg *lipgloss.AdaptiveColor) string {
 }
 
 func (m Model) renderSidebar() string {
-	var items []string
-
-	items = append(items, titleStyle.Render(m.title))
-
-	selectedSidebarIdx := -1
-	if len(m.selectableIndices) > 0 {
-		selectedSidebarIdx = m.selectableIndices[m.selectedIndex]
-	}
-
-	for i, entry := range m.sidebar {
-		if entry.IsSectionHeader {
-			items = append(items, "") // blank line above Tasks section
-			prefix := "  "
-			if m.multiGroup {
-				prefix = "    "
-			}
-			items = append(items, sectionHeaderStyle.Render(prefix+"Tasks"))
-			continue
-		}
-
-		if entry.IsGroup {
-			if i > 0 {
-				items = append(items, "")
-			}
-			count := m.manager.RunningInGroup(entry.Group)
-			chevron := "▾"
-			if m.collapsedGroups[entry.Group] {
-				chevron = "▸"
-			}
-			var label string
-			if count != "" {
-				label = fmt.Sprintf("%s %s (%s)", chevron, entry.Group, count)
-			} else {
-				label = fmt.Sprintf("%s %s", chevron, entry.Group)
-			}
-			if i == selectedSidebarIdx {
-				label = selectedItemStyle.Bold(true).Foreground(colorGroup).Render(label)
-			} else {
-				label = groupHeaderStyle.Render(label)
-			}
-			items = append(items, label)
-			continue
-		}
-
-		item := entry.Item
-		status := item.GetStatus()
-
-		prefix := "  "
-		if m.multiGroup {
-			prefix = "    "
-		}
-
-		var label string
-		if entry.Hidden {
-			dimLabel := fmt.Sprintf("%s○ %s", prefix, item.GetTitle())
-			if i == selectedSidebarIdx {
-				label = selectedItemStyle.Foreground(colorDim).Render(dimLabel)
-			} else {
-				label = normalItemStyle.Foreground(colorDim).Render(dimLabel)
-			}
-		} else if i == selectedSidebarIdx {
-			bg := colorSelectedBg
-			var d string
-			if item.Kind() == process.KindTask {
-				d = taskDot(status, &bg)
-			} else {
-				d = processDot(status, &bg)
-			}
-			selStyle := lipgloss.NewStyle().Background(bg)
-			row := selStyle.Render(" "+prefix) + d + selStyle.Render(" "+item.GetTitle())
-			totalWidth := sidebarWidth - 2
-			if vis := lipgloss.Width(row); vis < totalWidth {
-				row += selStyle.Render(strings.Repeat(" ", totalWidth-vis))
-			}
-			label = row
-		} else {
-			var d string
-			if item.Kind() == process.KindTask {
-				d = taskDot(status, nil)
-			} else {
-				d = processDot(status, nil)
-			}
-			label = normalItemStyle.Render(fmt.Sprintf("%s%s %s", prefix, d, item.GetTitle()))
-		}
-
-		items = append(items, label)
-	}
-
-	content := strings.Join(items, "\n")
+	title := titleStyle.Render(m.title)
+	content := title + "\n" + m.sidebarViewport.View()
 	return sidebarStyle.Height(m.height - 2).Render(content)
 }
 
