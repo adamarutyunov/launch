@@ -2,19 +2,19 @@
 
 A terminal process manager for developers running multiple projects and services locally.
 
-<!-- screenshot -->
+<img width="1624" height="975" alt="Screenshot 2026-03-23 at 22 55 21" src="https://github.com/user-attachments/assets/cc18ab11-9645-41c7-9da4-74418a5ba7b5" />
 
 Run all your services with one command, watch their logs live, start and stop individually or all at once. Works with a single project or a whole workspace.
 
 ## Features
 
-- **One config file per project** — drop a `launch.yml` in each service directory; run `launch` from the workspace root and it scans subdirectories automatically
-- **Multi-project sidebar** — services grouped by project, collapse/expand with `enter`
-- **Live log streaming** — per-process log pane, persists across restarts
-- **Process persistence** — detach with `q`, reattach later; processes keep running
-- **Dependency ordering** — `depends_on` starts services in the right order, across projects
-- **Health checks** — `ready_check` holds dependents until a service is actually up
-- **Task runner** — runs tasks from a `Taskfile.yml` alongside processes
+- **One config file per project** — just ask an agent to write a `launch.yml` file for your project, the syntax is given below; run `launch` from the workspace root and it scans subdirectories automatically;
+- **Multi-project sidebar** — services grouped by project, collapse/expand projects;
+- **Live log streaming** — per-process log pane, persists across restarts;
+- **Process persistence** — detach and reattach later with keeping the processes running, or exit and kill all;
+- **Dependency ordering** — start services in the right order, across multiple projects;
+- **Health checks** — holds dependents until a service is actually up;
+- **Taskfile support** — runs tasks from a `Taskfile.yml` alongside processes;
 
 ## Install
 
@@ -42,7 +42,7 @@ launch ~/projects   # discovers launch.yml in subdirectories
 
 ## Config
 
-Place a `launch.yml` in your project directory:
+Drop a `launch.yml` in your project directory, for example:
 
 ```yaml
 name: backend
@@ -88,8 +88,6 @@ depends_on:
   - shared:redis      # cross-project (project name : slug)
 ```
 
-When starting a process whose dependencies aren't running, launch prompts: start with deps, force start, or cancel.
-
 ### Taskfile integration
 
 Drop a `Taskfile.yml` next to `launch.yml` and its tasks appear in the sidebar automatically.
@@ -113,7 +111,7 @@ Drop a `Taskfile.yml` next to `launch.yml` and its tasks appear in the sidebar a
 
 ## Contributing
 
-Bug reports and pull requests welcome at [github.com/adamarutyunov/launch](https://github.com/adamarutyunov/launch/issues).
+Bug reports and pull requests are welcome at [github.com/adamarutyunov/launch](https://github.com/adamarutyunov/launch/issues).
 
 ---
 
