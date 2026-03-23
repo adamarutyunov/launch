@@ -8,33 +8,39 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
+// ManagedTask is a one-shot command (from a Taskfile) that runs to completion.
 type ManagedTask struct {
-	Slug        string
-	Description string // human-readable description from Taskfile desc field; may be empty
-	Group       string
-	Command     string
-	WorkingDir  string
+	Slug       string
+	Subtitle   string // human-readable description from Taskfile desc field; may be empty
+	Group      string
+	Command    string
+	WorkingDir string
 
-	mu       sync.Mutex
+	logBuf   logBuffer
+	notifier Notifier
+	mu       sync.Mutex // protects cmd / status / exitCode
 	cmd      *exec.Cmd
 	status   Status
 	exitCode int
-	logs     []LogLine
 }
 
-func NewManagedTask(slug, description, group, command, workingDir string) *ManagedTask {
+func NewManagedTask(slug, subtitle, group, command, workingDir string) *ManagedTask {
 	return &ManagedTask{
-		Slug:        slug,
-		Description: description,
-		Group:       group,
-		Command:     command,
-		WorkingDir:  workingDir,
-		status:      StatusStopped,
-		logs:        make([]LogLine, 0, 64),
+		Slug:       slug,
+		Subtitle:   subtitle,
+		Group:      group,
+		Command:    command,
+		WorkingDir: workingDir,
+		status:     StatusStopped,
+	}
+}
+
+// notify sends an event through the registered notifier, if any.
+func (t *ManagedTask) notify(msg any) {
+	if t.notifier != nil {
+		t.notifier.Send(msg)
 	}
 }
 
@@ -55,43 +61,14 @@ func (t *ManagedTask) ExitCode() int {
 	return t.exitCode
 }
 
-func (t *ManagedTask) GetLogs() []LogLine {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	result := make([]LogLine, len(t.logs))
-	copy(result, t.logs)
-	return result
-}
+// GetLogs implements SidebarItem.
+func (t *ManagedTask) GetLogs() []LogLine { return t.logBuf.snapshot() }
 
-func (t *ManagedTask) ClearLogs() {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.logs = t.logs[:0]
-}
+// ClearLogs implements SidebarItem.
+func (t *ManagedTask) ClearLogs() { t.logBuf.clear() }
 
-func (t *ManagedTask) appendLog(text string) LogLine {
-	line := LogLine{Text: text, Timestamp: time.Now()}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.logs = append(t.logs, line)
-	if len(t.logs) > maxLogLines {
-		t.logs = t.logs[len(t.logs)-maxLogLines:]
-	}
-	return line
-}
-
-func (t *ManagedTask) appendSystemLog(text string) LogLine {
-	line := LogLine{Text: text, Timestamp: time.Now(), IsSystem: true}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.logs = append(t.logs, line)
-	if len(t.logs) > maxLogLines {
-		t.logs = t.logs[len(t.logs)-maxLogLines:]
-	}
-	return line
-}
-
-func (t *ManagedTask) Start(program *tea.Program) error {
+// Start implements SidebarItem.
+func (t *ManagedTask) Start() error {
 	t.mu.Lock()
 	if t.status == StatusRunning {
 		t.mu.Unlock()
@@ -104,13 +81,7 @@ func (t *ManagedTask) Start(program *tea.Program) error {
 		return fmt.Errorf("creating pipe: %w", err)
 	}
 
-	cmd := exec.Command("sh", "-c", t.Command)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if t.WorkingDir != "" {
-		cmd.Dir = t.WorkingDir
-	}
-	cmd.Env = os.Environ()
-	cmd.Env = append(cmd.Env, "FORCE_COLOR=1", "CLICOLOR_FORCE=1", "TERM=xterm-256color")
+	cmd := buildCmd(t.Command, t.WorkingDir, nil)
 	cmd.Stdout = w
 	cmd.Stderr = w
 
@@ -126,16 +97,16 @@ func (t *ManagedTask) Start(program *tea.Program) error {
 	t.exitCode = 0
 	t.mu.Unlock()
 
-	program.Send(StatusChangeMsg{ProcessSlug: t.Slug, Group: t.Group, Status: StatusRunning})
+	t.notify(StatusChangeMsg{ProcessSlug: t.Slug, Group: t.Group, Status: StatusRunning})
 
 	// exitCh is buffered so the waiter goroutine doesn't block before closing w.
 	exitCh := make(chan int, 1)
 
 	go func() {
-		err := cmd.Wait()
+		waitErr := cmd.Wait()
 		exitCode := 0
-		if err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok {
+		if waitErr != nil {
+			if exitErr, ok := waitErr.(*exec.ExitError); ok {
 				exitCode = exitErr.ExitCode()
 			}
 		}
@@ -148,16 +119,14 @@ func (t *ManagedTask) Start(program *tea.Program) error {
 		scanner := bufio.NewScanner(r)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
-			line := t.appendLog(scanner.Text())
-			program.Send(LogMsg{ProcessSlug: t.Slug, Group: t.Group, Line: line})
+			line := t.logBuf.write(scanner.Text(), false)
+			t.notify(LogMsg{ProcessSlug: t.Slug, Group: t.Group, Line: line})
 		}
 
 		exitCode := <-exitCh
 
 		t.mu.Lock()
-		currentStatus := t.status
-		if currentStatus == StatusRunning {
-			// Natural exit — determine success or failure.
+		if t.status == StatusRunning {
 			if exitCode == 0 {
 				t.status = StatusSucceeded
 			} else {
@@ -179,14 +148,15 @@ func (t *ManagedTask) Start(program *tea.Program) error {
 		default:
 			systemMsg = "Task stopped"
 		}
-		line := t.appendSystemLog(systemMsg)
-		program.Send(LogMsg{ProcessSlug: t.Slug, Group: t.Group, Line: line})
-		program.Send(StatusChangeMsg{ProcessSlug: t.Slug, Group: t.Group, Status: newStatus, ExitCode: exitCode})
+		line := t.logBuf.write(systemMsg, true)
+		t.notify(LogMsg{ProcessSlug: t.Slug, Group: t.Group, Line: line})
+		t.notify(StatusChangeMsg{ProcessSlug: t.Slug, Group: t.Group, Status: newStatus, ExitCode: exitCode})
 	}()
 
 	return nil
 }
 
+// Stop implements SidebarItem.
 func (t *ManagedTask) Stop() error {
 	t.mu.Lock()
 	cmd := t.cmd

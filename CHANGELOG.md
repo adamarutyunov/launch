@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.2] - 2026-03-23
+
+### Fixed
+- Taskfile-only projects (no `launch.yml`) now work when run from the project root; project name defaults to the directory name
+- Group header counter `(x/y)` now counts only processes, not tasks; hidden entirely when the group has no processes
+- `A` (start all) now starts only processes, not tasks
+- Manual process start with unmet dependencies now prompts with three options: start with all dependencies (full tree), force start (skip dep check), or cancel — instead of silently failing
+
+### Added
+- `Manager.DependencyTree(proc)` — builds the full transitive dependency tree for a process (handles cycles via visited set)
+- Expanded README config reference with full YAML schema, field table, and notes on circular dependency behavior — structured for easy use by automated tooling
+
 ## [1.0.1] - 2026-03-20
 
 ### Added

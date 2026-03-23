@@ -36,68 +36,69 @@ launch ~/projects                # explicit path
 
 ## Config (launch.yml)
 
+Place a `launch.yml` file in your project directory (or any subdirectory when using multi-project mode).
+
+### Full schema
+
 ```yaml
-name: backend
+# launch.yml
+name: my-project          # optional; defaults to the directory name
+
 processes:
-  database:
-    title: Database
-    command: docker compose up db
-    auto_start: true
-    ready_check:
-      command: pg_isready -h 127.0.0.1 -p 5432
-      interval: 2s
-      retries: 30
-  api:
-    title: API Server
-    command: go run ./cmd/api
-    auto_start: true
-    depends_on:
-      - database                  # same-project dependency (just slug)
-      - shared:redis              # cross-project dependency (group:slug)
-  frontend:
-    title: Frontend
-    command: pnpm dev
-    working_dir: web
-    auto_start: true
-    env:
-      PORT: "3001"
+  <slug>:                 # identifier used for depends_on references (lowercase, underscores/hyphens ok)
+    title: My Process     # required — human-readable name shown in the sidebar
+    command: ./start.sh   # required — shell command (run via sh -c)
+    auto_start: false     # optional — start automatically when launch opens (default: false)
+    working_dir: ./subdir # optional — relative to launch.yml location (default: launch.yml directory)
+    env:                  # optional — extra environment variables
+      KEY: value
+    depends_on:           # optional — other processes that must be running before this starts
+      - other-slug        # same-project process (just the slug)
+      - group:slug        # cross-project process (group name : slug)
+    ready_check:          # optional — health check; process shows "starting" until this passes
+      command: curl -sf http://localhost:3000/health
+      interval: 2s        # time between retries (default: 2s)
+      retries: 30         # max attempts before giving up (default: 30)
 ```
 
-### Fields
+### Field reference
 
-| Field | Required | Description |
-|---|---|---|
-| `title` | yes | Human-readable name shown in sidebar |
-| `command` | yes | Shell command to run |
-| `auto_start` | no | Start automatically on launch (default: false) |
-| `depends_on` | no | Dependencies that must be running (ready) before start |
-| `ready_check` | no | Health check to determine when the process is ready |
-| `working_dir` | no | Working directory (default: launch.yml location) |
-| `env` | no | Extra environment variables |
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `name` | no | directory name | Project name shown in sidebar |
+| `processes.<slug>.title` | yes | — | Human-readable name shown in sidebar |
+| `processes.<slug>.command` | yes | — | Shell command to run (via `sh -c`) |
+| `processes.<slug>.auto_start` | no | `false` | Start automatically on launch |
+| `processes.<slug>.working_dir` | no | launch.yml directory | Working directory (relative to launch.yml) |
+| `processes.<slug>.env` | no | — | Extra environment variables (map) |
+| `processes.<slug>.depends_on` | no | — | List of dependency slugs; must be running before this starts |
+| `processes.<slug>.ready_check.command` | no | — | Shell command polled to detect readiness |
+| `processes.<slug>.ready_check.interval` | no | `2s` | Time between ready check retries |
+| `processes.<slug>.ready_check.retries` | no | `30` | Max ready check attempts before giving up |
 
 ### depends_on
 
 Dependencies reference other processes by slug:
 
-- `database` — same project
-- `shared:redis` — cross-project (`group:slug`)
+- `database` — same project (just the slug)
+- `shared:redis` — cross-project (`group:slug`, where group is the other project's `name` or directory name)
 
-If a dependency isn't running when you try to start a process, an alert is shown and the process won't start. Dependencies must be in `running` state (not just `starting`) — so if a dependency has a `ready_check`, it must pass before dependents can start.
+When you try to start a process manually and its dependencies are not running, launch prompts you with three options: start with all dependencies, force start (skip deps), or cancel. Dependencies must be in `running` state (not just `starting`) — so if a dependency has a `ready_check`, it must pass before dependents can start.
+
+Circular dependencies are detected at runtime: the affected processes are immediately stopped with an error message rather than hanging.
 
 ### ready_check
 
-Polls a shell command to determine when a process is actually ready to serve, not just that the OS process is alive.
+Polls a shell command to determine when a process is actually ready to serve, not just that the OS process has started.
 
 ```yaml
 ready_check:
-  command: pg_isready -h 127.0.0.1 -p 5432  # any shell command
+  command: pg_isready -h 127.0.0.1 -p 5432  # any shell command; exit 0 = ready
   interval: 2s     # time between retries (default: 2s)
   retries: 30      # max attempts before giving up (default: 30)
 ```
 
-While the check is polling, the process shows as `starting` (yellow ◐ in sidebar). Once the check passes, it transitions to `running` (green ●). If all retries are exhausted, the process stays in `starting` state and an alert is shown.
-
-Without `ready_check`, a process is considered `running` immediately after the OS process starts.
+While polling, the process shows as `starting` (yellow ◐). Once the check passes, it transitions to `running` (green ●). Without `ready_check`, a process is considered `running` immediately after the OS process starts.
 
 ## Keybindings
 

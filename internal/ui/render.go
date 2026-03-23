@@ -1,0 +1,304 @@
+package ui
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/adam/launch/internal/process"
+	"github.com/charmbracelet/lipgloss"
+)
+
+const sidebarWidth = 32
+
+// ANSI 16-color palette — adapts to terminal theme (dark/light).
+var (
+	colorRunning     = lipgloss.Color("10") // bright green
+	colorTaskRunning = lipgloss.Color("14") // bright cyan (task in-progress)
+	colorStarting    = lipgloss.Color("3")  // yellow
+	colorQueued      = lipgloss.Color("8")  // dark grey
+	colorStopped     = lipgloss.Color("8")  // dark grey
+	colorCrashed     = lipgloss.Color("9")  // bright red
+	colorSucceeded   = lipgloss.Color("10") // bright green
+	colorFailed      = lipgloss.Color("9")  // bright red
+	colorDim         = lipgloss.Color("8")  // dark grey
+	colorBorder      = lipgloss.Color("8")  // dark grey
+	colorAlert       = lipgloss.Color("3")  // yellow
+	// colorGroup is adaptive: light-grey on dark terminals, dark-grey on light ones.
+	colorGroup = lipgloss.AdaptiveColor{Dark: "7", Light: "8"}
+	// colorSelectedBg is adaptive: dark background on dark themes, light on light.
+	colorSelectedBg = lipgloss.AdaptiveColor{Dark: "#27272a", Light: "#d4d4d8"}
+
+	sidebarStyle = lipgloss.NewStyle().
+			Width(sidebarWidth).
+			BorderRight(true).
+			BorderStyle(lipgloss.NormalBorder()).
+			BorderForeground(colorBorder).
+			Padding(1, 0)
+
+	selectedItemStyle = lipgloss.NewStyle().
+				Background(colorSelectedBg).
+				Width(sidebarWidth - 2).
+				Padding(0, 1)
+
+	normalItemStyle = lipgloss.NewStyle().
+			Width(sidebarWidth - 2).
+			Padding(0, 1)
+
+	groupHeaderStyle = lipgloss.NewStyle().
+				Foreground(colorGroup).
+				Bold(true).
+				Width(sidebarWidth - 2).
+				Padding(0, 1)
+
+	sectionHeaderStyle = lipgloss.NewStyle().
+				Foreground(colorDim).
+				Width(sidebarWidth - 2).
+				Padding(0, 1)
+
+	titleStyle = lipgloss.NewStyle().
+			Bold(true).
+			Padding(0, 1).
+			MarginBottom(1)
+
+	helpStyle = lipgloss.NewStyle().
+			Foreground(colorDim).
+			Padding(0, 1)
+
+	logHeaderStyle = lipgloss.NewStyle().
+			Bold(true).
+			Padding(0, 1)
+
+	systemLogStyle = lipgloss.NewStyle().
+			Foreground(colorDim).
+			Italic(true)
+
+	alertStyle = lipgloss.NewStyle().
+			Foreground(colorAlert).
+			Bold(true).
+			Padding(0, 1)
+)
+
+// dot renders a status indicator with an optional selection background.
+// Passing bg prevents the ANSI reset inside the dot from revealing the
+// terminal's default background between the dot and the title text.
+func dot(fg lipgloss.TerminalColor, char string, bg *lipgloss.AdaptiveColor) string {
+	s := lipgloss.NewStyle().Foreground(fg)
+	if bg != nil {
+		s = s.Background(*bg)
+	}
+	return s.Render(char)
+}
+
+func taskDot(status process.Status, bg *lipgloss.AdaptiveColor) string {
+	switch status {
+	case process.StatusRunning:
+		return dot(colorTaskRunning, "●", bg)
+	case process.StatusSucceeded:
+		return dot(colorSucceeded, "●", bg)
+	case process.StatusFailed:
+		return dot(colorFailed, "●", bg)
+	default:
+		return dot(colorStopped, "○", bg)
+	}
+}
+
+func processDot(status process.Status, bg *lipgloss.AdaptiveColor) string {
+	switch status {
+	case process.StatusRunning:
+		return dot(colorRunning, "●", bg)
+	case process.StatusStarting:
+		return dot(colorStarting, "◐", bg)
+	case process.StatusQueued:
+		return dot(colorQueued, "◔", bg)
+	case process.StatusCrashed:
+		return dot(colorCrashed, "●", bg)
+	default:
+		return dot(colorStopped, "○", bg)
+	}
+}
+
+func (m Model) renderSidebar() string {
+	var items []string
+
+	items = append(items, titleStyle.Render(m.title))
+
+	selectedSidebarIdx := -1
+	if len(m.selectableIndices) > 0 {
+		selectedSidebarIdx = m.selectableIndices[m.selectedIndex]
+	}
+
+	for i, entry := range m.sidebar {
+		if entry.IsSectionHeader {
+			items = append(items, "") // blank line above Tasks section
+			prefix := "  "
+			if m.multiGroup {
+				prefix = "    "
+			}
+			items = append(items, sectionHeaderStyle.Render(prefix+"Tasks"))
+			continue
+		}
+
+		if entry.IsGroup {
+			if i > 0 {
+				items = append(items, "")
+			}
+			count := m.manager.RunningInGroup(entry.Group)
+			chevron := "▾"
+			if m.collapsedGroups[entry.Group] {
+				chevron = "▸"
+			}
+			var label string
+			if count != "" {
+				label = fmt.Sprintf("%s %s (%s)", chevron, entry.Group, count)
+			} else {
+				label = fmt.Sprintf("%s %s", chevron, entry.Group)
+			}
+			if i == selectedSidebarIdx {
+				label = selectedItemStyle.Bold(true).Foreground(colorGroup).Render(label)
+			} else {
+				label = groupHeaderStyle.Render(label)
+			}
+			items = append(items, label)
+			continue
+		}
+
+		item := entry.Item
+		status := item.GetStatus()
+
+		prefix := "  "
+		if m.multiGroup {
+			prefix = "    "
+		}
+
+		var label string
+		if entry.Hidden {
+			dimLabel := fmt.Sprintf("%s○ %s", prefix, item.GetTitle())
+			if i == selectedSidebarIdx {
+				label = selectedItemStyle.Foreground(colorDim).Render(dimLabel)
+			} else {
+				label = normalItemStyle.Foreground(colorDim).Render(dimLabel)
+			}
+		} else if i == selectedSidebarIdx {
+			bg := colorSelectedBg
+			var d string
+			if item.Kind() == process.KindTask {
+				d = taskDot(status, &bg)
+			} else {
+				d = processDot(status, &bg)
+			}
+			selStyle := lipgloss.NewStyle().Background(bg)
+			row := selStyle.Render(" "+prefix) + d + selStyle.Render(" "+item.GetTitle())
+			totalWidth := sidebarWidth - 2
+			if vis := lipgloss.Width(row); vis < totalWidth {
+				row += selStyle.Render(strings.Repeat(" ", totalWidth-vis))
+			}
+			label = row
+		} else {
+			var d string
+			if item.Kind() == process.KindTask {
+				d = taskDot(status, nil)
+			} else {
+				d = processDot(status, nil)
+			}
+			label = normalItemStyle.Render(fmt.Sprintf("%s%s %s", prefix, d, item.GetTitle()))
+		}
+
+		items = append(items, label)
+	}
+
+	content := strings.Join(items, "\n")
+	return sidebarStyle.Height(m.height - 2).Render(content)
+}
+
+func (m Model) renderLogPane() string {
+	if m.startDialog != nil {
+		return m.renderStartDialog()
+	}
+
+	entry := m.selectedEntry()
+	if entry == nil {
+		return ""
+	}
+
+	var header string
+	if entry.IsGroup {
+		count := m.manager.RunningInGroup(entry.Group)
+		if count != "" {
+			header = logHeaderStyle.Render(fmt.Sprintf("%s — %s", entry.Group, count))
+		} else {
+			header = logHeaderStyle.Render(entry.Group)
+		}
+	} else {
+		item := entry.Item
+		status := item.GetStatus()
+		var statusText string
+
+		if item.Kind() == process.KindTask {
+			switch status {
+			case process.StatusRunning:
+				statusText = lipgloss.NewStyle().Foreground(colorTaskRunning).Render("running")
+			case process.StatusSucceeded:
+				statusText = lipgloss.NewStyle().Foreground(colorSucceeded).Render("succeeded")
+			case process.StatusFailed:
+				task := item.(*process.ManagedTask)
+				statusText = lipgloss.NewStyle().Foreground(colorFailed).Render(
+					fmt.Sprintf("failed (exit %d)", task.ExitCode()))
+			default:
+				statusText = lipgloss.NewStyle().Foreground(colorStopped).Render("stopped")
+			}
+		} else {
+			proc := item.(*process.ManagedProcess)
+			switch status {
+			case process.StatusRunning:
+				statusText = lipgloss.NewStyle().Foreground(colorRunning).Render("running")
+			case process.StatusStarting:
+				statusText = lipgloss.NewStyle().Foreground(colorStarting).Render("starting...")
+			case process.StatusQueued:
+				statusText = lipgloss.NewStyle().Foreground(colorQueued).Render("queued")
+			case process.StatusCrashed:
+				statusText = lipgloss.NewStyle().Foreground(colorCrashed).Render(
+					fmt.Sprintf("crashed (exit %d)", proc.ExitCode()))
+			default:
+				statusText = lipgloss.NewStyle().Foreground(colorStopped).Render("stopped")
+			}
+		}
+
+		headerText := item.GetTitle()
+		if m.multiGroup {
+			headerText = item.GetGroup() + " / " + item.GetTitle()
+		}
+		header = logHeaderStyle.Render(fmt.Sprintf("%s — %s", headerText, statusText))
+	}
+
+	// For tasks with a subtitle, show it beneath the header.
+	var subtitleLine string
+	if entry.Item != nil {
+		if task, ok := entry.Item.(*process.ManagedTask); ok && task.Subtitle != "" {
+			subtitleLine = helpStyle.Render(task.Subtitle)
+		}
+	}
+
+	var parts []string
+	parts = append(parts, header)
+	if subtitleLine != "" {
+		parts = append(parts, subtitleLine)
+	}
+	if m.alert != "" && time.Now().Before(m.alertExpiry) {
+		parts = append(parts, alertStyle.Render("⚠ "+m.alert))
+	}
+	parts = append(parts, m.viewport.View())
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+}
+
+func (m Model) renderFooter() string {
+	help := "  ↑/↓ select • enter collapse • s/space start/stop • A start all • S stop all • r restart • h hide • H show hidden • c clear • q detach • Q quit"
+	if m.showHiddenTasks {
+		help += " [showing hidden]"
+	}
+	left := helpStyle.Render(help)
+	right := helpStyle.Align(lipgloss.Right).
+		Width(m.width - lipgloss.Width(left)).
+		Render(m.manager.Summary())
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+}

@@ -12,6 +12,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// teaNotifier adapts *tea.Program to the process.Notifier interface.
+type teaNotifier struct{ prog *tea.Program }
+
+func (n teaNotifier) Send(msg any) { n.prog.Send(msg) }
+
 func main() {
 	rootDir := "."
 	if len(os.Args) > 1 {
@@ -56,7 +61,7 @@ func main() {
 		for _, namedTask := range group.Tasks {
 			managed := process.NewManagedTask(
 				namedTask.Slug,
-				namedTask.Title,
+				namedTask.Desc,
 				group.Name,
 				namedTask.Command,
 				namedTask.WorkingDir,
@@ -74,7 +79,7 @@ func main() {
 	}
 
 	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
-	manager.Program = program
+	manager.SetNotifier(teaNotifier{program})
 
 	finalModel, err := program.Run()
 	if err != nil {

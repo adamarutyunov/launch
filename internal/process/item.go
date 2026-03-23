@@ -1,7 +1,5 @@
 package process
 
-import tea "github.com/charmbracelet/bubbletea"
-
 // ItemKind distinguishes processes from tasks in the sidebar.
 type ItemKind int
 
@@ -18,7 +16,7 @@ type SidebarItem interface {
 	GetStatus() Status
 	GetLogs() []LogLine
 	ClearLogs()
-	Start(program *tea.Program) error
+	Start() error
 	Stop() error
 	Kind() ItemKind
 }
