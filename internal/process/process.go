@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/adam/launch/internal/config"
@@ -303,11 +302,11 @@ func (p *ManagedProcess) Stop() error {
 	p.mu.Unlock()
 
 	if wasReattached {
-		_ = syscall.Kill(-pid, syscall.SIGTERM)
+		killProcessGroup(pid, true)
 		go func() {
 			time.Sleep(3 * time.Second)
 			if isAlive(pid) {
-				_ = syscall.Kill(-pid, syscall.SIGKILL)
+				killProcessGroup(pid, false)
 			}
 			p.mu.Lock()
 			p.pid = 0
@@ -315,14 +314,14 @@ func (p *ManagedProcess) Stop() error {
 			p.closeTailDone()
 		}()
 	} else if cmd != nil && cmd.Process != nil {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		killProcessGroup(cmd.Process.Pid, true)
 		go func() {
 			time.Sleep(3 * time.Second)
 			p.mu.Lock()
 			c := p.cmd
 			p.mu.Unlock()
 			if c == cmd {
-				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+				killProcessGroup(cmd.Process.Pid, false)
 			}
 		}()
 	}

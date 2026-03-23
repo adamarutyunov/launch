@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -168,10 +167,10 @@ func (t *ManagedTask) Stop() error {
 	t.mu.Unlock()
 
 	if cmd.Process != nil {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		killProcessGroup(cmd.Process.Pid, true)
 		go func() {
 			time.Sleep(2 * time.Second)
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			killProcessGroup(cmd.Process.Pid, false)
 		}()
 	}
 	return nil
