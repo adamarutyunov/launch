@@ -18,19 +18,14 @@ Run all your services with one command, watch their logs live, start and stop in
 
 ## Install
 
-```bash
-git clone https://github.com/adamarutyunov/launch.git ~/launch
-cd ~/launch && go build -o launch .
+```sh
+curl -fsSL https://raw.githubusercontent.com/adamarutyunov/launch/main/install.sh | sh
 ```
 
-Add to your PATH:
+Or install a specific version:
 
-```bash
-# .zshrc / .bashrc
-export PATH="$HOME/launch:$PATH"
-
-# config.fish
-fish_add_path ~/launch
+```sh
+VERSION=v1.1.0 curl -fsSL https://raw.githubusercontent.com/adamarutyunov/launch/main/install.sh | sh
 ```
 
 ## Usage
