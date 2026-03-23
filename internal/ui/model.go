@@ -20,27 +20,35 @@ const (
 )
 
 type Model struct {
-	manager           *process.Manager
-	sidebar           []SidebarEntry
-	selectedIndex     int
+	manager         *process.Manager
+	sidebar         []SidebarEntry
+	selectedIndex   int
 	selectableIndices []int
-	viewport          viewport.Model
-	width, height     int
-	ready             bool
-	autoScroll        bool
-	title             string
-	multiGroup        bool
-	ExitMode          ExitMode
-	SavedSession      *state.SessionState
-	collapsedGroups   map[string]bool
-	hiddenTasks       map[string]bool
-	showHiddenTasks   bool
-	alert             string
-	alertExpiry       time.Time
-	startDialog       *startDialogState
+	sidebarViewport viewport.Model
+	viewport        viewport.Model
+	width, height   int
+	ready           bool
+	autoScroll      bool
+	title           string
+	multiGroup      bool
+	ExitMode        ExitMode
+	SavedSession    *state.SessionState
+	collapsedGroups map[string]bool
+	hiddenTasks     map[string]bool
+	showHiddenTasks bool
+	alert           string
+	alertExpiry     time.Time
+	startDialog     *startDialogState
 }
 
 func NewModel(manager *process.Manager, title string, settings *state.UserSettings) Model {
+	if settings.CollapsedGroups == nil {
+		settings.CollapsedGroups = make(map[string]bool)
+	}
+	if settings.HiddenTasks == nil {
+		settings.HiddenTasks = make(map[string]bool)
+	}
+
 	sidebar := buildSidebar(manager, settings.CollapsedGroups, settings.HiddenTasks, false)
 	selectable := selectableIndices(sidebar)
 
@@ -110,6 +118,7 @@ func (m *Model) rebuildSidebar() {
 	if m.selectedIndex < 0 {
 		m.selectedIndex = 0
 	}
+	m.updateSidebarContent()
 }
 
 func (m *Model) saveSettings() {
@@ -168,14 +177,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		logWidth := m.width - sidebarWidth - 3
 		logHeight := m.height - 4
 
+		titleRendered := titleStyle.Render(m.title)
+		titleHeight := strings.Count(titleRendered, "\n") + 1
+		sidebarListHeight := m.height - 4 - titleHeight
+
 		if !m.ready {
 			m.viewport = viewport.New(logWidth, logHeight)
 			m.viewport.Style = lipgloss.NewStyle()
+			m.sidebarViewport = viewport.New(sidebarWidth-2, sidebarListHeight)
 			m.ready = true
 		} else {
 			m.viewport.Width = logWidth
 			m.viewport.Height = logHeight
+			m.sidebarViewport.Width = sidebarWidth - 2
+			m.sidebarViewport.Height = sidebarListHeight
 		}
+		m.updateSidebarContent()
 		m.updateViewportContent()
 		return m, nil
 
@@ -212,6 +229,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.selectedIndex < len(m.selectableIndices)-1 {
 				m.selectedIndex++
 				m.autoScroll = true
+				m.updateSidebarContent()
 				m.updateViewportContent()
 			}
 			return m, nil
@@ -220,6 +238,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.selectedIndex > 0 {
 				m.selectedIndex--
 				m.autoScroll = true
+				m.updateSidebarContent()
 				m.updateViewportContent()
 			}
 			return m, nil
@@ -378,6 +397,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case process.StatusChangeMsg:
+		m.updateSidebarContent()
 		entry := m.selectedEntry()
 		if entry != nil && entry.IsGroup {
 			m.updateViewportContent()
@@ -395,6 +415,114 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// updateSidebarContent rebuilds the sidebar viewport content and scrolls it
+// so the selected entry is visible.
+func (m *Model) updateSidebarContent() {
+	if !m.ready {
+		return
+	}
+
+	selectedSidebarIdx := -1
+	if len(m.selectableIndices) > 0 {
+		selectedSidebarIdx = m.selectableIndices[m.selectedIndex]
+	}
+
+	var items []string
+	selectedLine := 0
+
+	for i, entry := range m.sidebar {
+		if entry.IsSectionHeader {
+			items = append(items, "") // blank line above Tasks section
+			prefix := "  "
+			if m.multiGroup {
+				prefix = "    "
+			}
+			items = append(items, sectionHeaderStyle.Render(prefix+"Tasks"))
+			continue
+		}
+
+		if entry.IsGroup {
+			if i > 0 {
+				items = append(items, "")
+			}
+			count := m.manager.RunningInGroup(entry.Group)
+			chevron := "▾"
+			if m.collapsedGroups[entry.Group] {
+				chevron = "▸"
+			}
+			var label string
+			if count != "" {
+				label = fmt.Sprintf("%s %s (%s)", chevron, entry.Group, count)
+			} else {
+				label = fmt.Sprintf("%s %s", chevron, entry.Group)
+			}
+			if i == selectedSidebarIdx {
+				selectedLine = len(items)
+				label = selectedItemStyle.Bold(true).Foreground(colorGroup).Render(label)
+			} else {
+				label = groupHeaderStyle.Render(label)
+			}
+			items = append(items, label)
+			continue
+		}
+
+		item := entry.Item
+		status := item.GetStatus()
+
+		prefix := "  "
+		if m.multiGroup {
+			prefix = "    "
+		}
+
+		var label string
+		if entry.Hidden {
+			dimLabel := fmt.Sprintf("%s○ %s", prefix, item.GetTitle())
+			if i == selectedSidebarIdx {
+				selectedLine = len(items)
+				label = selectedItemStyle.Foreground(colorDim).Render(dimLabel)
+			} else {
+				label = normalItemStyle.Foreground(colorDim).Render(dimLabel)
+			}
+		} else if i == selectedSidebarIdx {
+			selectedLine = len(items)
+			bg := colorSelectedBg
+			var d string
+			if item.Kind() == process.KindTask {
+				d = taskDot(status, &bg)
+			} else {
+				d = processDot(status, &bg)
+			}
+			selStyle := lipgloss.NewStyle().Background(bg)
+			row := selStyle.Render(" "+prefix) + d + selStyle.Render(" "+item.GetTitle())
+			totalWidth := sidebarWidth - 2
+			if vis := lipgloss.Width(row); vis < totalWidth {
+				row += selStyle.Render(strings.Repeat(" ", totalWidth-vis))
+			}
+			label = row
+		} else {
+			var d string
+			if item.Kind() == process.KindTask {
+				d = taskDot(status, nil)
+			} else {
+				d = processDot(status, nil)
+			}
+			label = normalItemStyle.Render(fmt.Sprintf("%s%s %s", prefix, d, item.GetTitle()))
+		}
+
+		items = append(items, label)
+	}
+
+	m.sidebarViewport.SetContent(strings.Join(items, "\n"))
+
+	// Scroll so the selected line is visible.
+	if selectedLine < m.sidebarViewport.YOffset {
+		m.sidebarViewport.SetYOffset(selectedLine)
+	}
+	if selectedLine >= m.sidebarViewport.YOffset+m.sidebarViewport.Height {
+		m.sidebarViewport.SetYOffset(selectedLine - m.sidebarViewport.Height + 1)
+	}
 }
 
 func (m *Model) updateViewportContent() {
@@ -465,14 +593,6 @@ func (m Model) View() string {
 	logPane := m.renderLogPane()
 	main := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, logPane)
 	return lipgloss.JoinVertical(lipgloss.Left, main, m.renderFooter())
-}
-
-// padRight pads s with spaces to width w (truncates if longer).
-func padRight(s string, w int) string {
-	if len(s) >= w {
-		return s
-	}
-	return s + strings.Repeat(" ", w-len(s))
 }
 
 // joinLines joins a slice of strings with newlines.
