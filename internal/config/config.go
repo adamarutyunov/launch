@@ -77,7 +77,7 @@ type NamedProcess struct {
 // NamedTask represents a task discovered from a Taskfile.
 type NamedTask struct {
 	Slug       string
-	Title      string
+	Desc       string // from Taskfile desc field; may be empty
 	Command    string // e.g. "task build"
 	WorkingDir string // absolute path to the directory containing the Taskfile
 }
@@ -120,7 +120,7 @@ func loadTaskfile(dir string) ([]NamedTask, error) {
 			task := tf.Tasks[slug]
 			tasks = append(tasks, NamedTask{
 				Slug:       slug,
-				Title:      task.Desc, // may be empty
+				Desc:       task.Desc,
 				Command:    "task " + slug,
 				WorkingDir: dir,
 			})
@@ -227,6 +227,14 @@ func Discover(rootDir string) ([]Group, error) {
 	cfg, path, err := loadConfig(rootDir)
 	if err == nil {
 		return []Group{configToGroup(cfg, path)}, nil
+	}
+
+	// No launch.yml in root — check for a standalone Taskfile in root.
+	if tasks, _ := loadTaskfile(rootDir); len(tasks) > 0 {
+		return []Group{{
+			Name:  filepath.Base(rootDir),
+			Tasks: tasks,
+		}}, nil
 	}
 
 	entries, err := os.ReadDir(rootDir)

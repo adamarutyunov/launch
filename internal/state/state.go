@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 )
 
@@ -116,16 +115,3 @@ func ProcessKey(group, name string) string {
 	return group + "/" + name
 }
 
-// IsProcessAlive checks if a process with the given PID is still running.
-func IsProcessAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	// On Unix, FindProcess always succeeds. Send signal 0 to check.
-	err = process.Signal(syscall.Signal(0))
-	return err == nil
-}
