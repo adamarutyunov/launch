@@ -1,6 +1,6 @@
 package ui
 
-import "github.com/adam/launch/internal/process"
+import "github.com/adamarutyunov/launch/internal/process"
 
 // SidebarEntry represents one row in the sidebar: a group header, a section
 // divider ("Tasks"), or a process/task item.

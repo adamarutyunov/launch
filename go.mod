@@ -1,4 +1,4 @@
-module github.com/adam/launch
+module github.com/adamarutyunov/launch
 
 go 1.25.5
 

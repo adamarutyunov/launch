@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/adam/launch/internal/config"
+	"github.com/adamarutyunov/launch/internal/config"
 )
 
 // ManagedProcess is a long-running service with optional health checks and

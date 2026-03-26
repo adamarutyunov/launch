@@ -5,10 +5,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/adam/launch/internal/config"
-	"github.com/adam/launch/internal/process"
-	"github.com/adam/launch/internal/state"
-	"github.com/adam/launch/internal/ui"
+	"github.com/adamarutyunov/launch/internal/config"
+	"github.com/adamarutyunov/launch/internal/process"
+	"github.com/adamarutyunov/launch/internal/state"
+	"github.com/adamarutyunov/launch/internal/ui"
 	tea "github.com/charmbracelet/bubbletea"
 )
 

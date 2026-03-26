@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/adam/launch/internal/state"
+	"github.com/adamarutyunov/launch/internal/state"
 )
 
 // Manager owns all processes and tasks for a launch session and routes events

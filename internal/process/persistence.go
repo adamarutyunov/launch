@@ -3,7 +3,7 @@ package process
 import (
 	"time"
 
-	"github.com/adam/launch/internal/state"
+	"github.com/adamarutyunov/launch/internal/state"
 )
 
 // SaveState persists the PIDs of all running processes so they can be
