@@ -402,6 +402,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if entry != nil && entry.IsGroup {
 			m.updateViewportContent()
 		}
+		_ = m.manager.SaveState()
 		return m, nil
 	}
 
