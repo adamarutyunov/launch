@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/adam/launch/internal/process"
+	"github.com/adamarutyunov/launch/internal/process"
 	"github.com/charmbracelet/lipgloss"
 
 )

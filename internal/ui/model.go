@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/adam/launch/internal/process"
-	"github.com/adam/launch/internal/state"
+	"github.com/adamarutyunov/launch/internal/process"
+	"github.com/adamarutyunov/launch/internal/state"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -402,6 +402,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if entry != nil && entry.IsGroup {
 			m.updateViewportContent()
 		}
+		_ = m.manager.SaveState()
 		return m, nil
 	}
 
