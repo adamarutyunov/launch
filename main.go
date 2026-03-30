@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,9 +19,11 @@ type teaNotifier struct{ prog *tea.Program }
 func (n teaNotifier) Send(msg any) { n.prog.Send(msg) }
 
 func main() {
+	noAutoStart := flag.Bool("no-autostart", false, "skip auto-starting processes on launch")
+	flag.Parse()
 	rootDir := "."
-	if len(os.Args) > 1 {
-		rootDir = os.Args[1]
+	if flag.NArg() > 0 {
+		rootDir = flag.Arg(0)
 	}
 
 	absDir, err := filepath.Abs(rootDir)
@@ -72,6 +75,7 @@ func main() {
 
 	settings := state.LoadSettings(absDir)
 	model := ui.NewModel(manager, "Launch "+Version, settings)
+	model.NoAutoStart = *noAutoStart
 
 	session, err := state.Load(absDir)
 	if err == nil && len(session.Processes) > 0 {

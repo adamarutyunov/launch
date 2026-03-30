@@ -56,6 +56,9 @@ func NewManagedProcess(slug, title, group, command, workingDir string, env map[s
 	}
 }
 
+// QualifiedSlug returns "group:slug" for cross-group identification.
+func (p *ManagedProcess) QualifiedSlug() string { return p.Group + ":" + p.Slug }
+
 // notify sends an event through the registered notifier, if any.
 func (p *ManagedProcess) notify(msg any) {
 	if p.notifier != nil {

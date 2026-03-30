@@ -39,6 +39,7 @@ type Model struct {
 	alert           string
 	alertExpiry     time.Time
 	startDialog     *startDialogState
+	NoAutoStart     bool
 }
 
 func NewModel(manager *process.Manager, title string, settings *state.UserSettings) Model {
@@ -142,7 +143,7 @@ func (m Model) Init() tea.Cmd {
 	return func() tea.Msg {
 		if m.SavedSession != nil {
 			m.manager.ReattachFromState(m.SavedSession)
-		} else {
+		} else if !m.NoAutoStart {
 			m.manager.StartAutoStart()
 		}
 		return nil
