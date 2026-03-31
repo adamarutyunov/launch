@@ -20,6 +20,7 @@ func (n teaNotifier) Send(msg any) { n.prog.Send(msg) }
 
 func main() {
 	noAutoStart := flag.Bool("no-autostart", false, "skip auto-starting processes on launch")
+	forceAutoStart := flag.Bool("force-autostart", false, "force auto-start processes individually without dependency checks")
 	flag.Parse()
 	rootDir := "."
 	if flag.NArg() > 0 {
@@ -75,7 +76,8 @@ func main() {
 
 	settings := state.LoadSettings(absDir)
 	model := ui.NewModel(manager, "Launch "+Version, settings)
-	model.NoAutoStart = *noAutoStart
+	model.NoAutoStart = *noAutoStart || *forceAutoStart
+	model.ForceAutoStart = *forceAutoStart
 
 	session, err := state.Load(absDir)
 	if err == nil && len(session.Processes) > 0 {

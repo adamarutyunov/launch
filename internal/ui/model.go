@@ -40,6 +40,7 @@ type Model struct {
 	alertExpiry     time.Time
 	startDialog     *startDialogState
 	NoAutoStart     bool
+	ForceAutoStart  bool
 }
 
 func NewModel(manager *process.Manager, title string, settings *state.UserSettings) Model {
@@ -143,6 +144,12 @@ func (m Model) Init() tea.Cmd {
 	return func() tea.Msg {
 		if m.SavedSession != nil {
 			m.manager.ReattachFromState(m.SavedSession)
+		} else if m.ForceAutoStart {
+			for _, proc := range m.manager.Processes {
+				if proc.AutoStart && !proc.Status().IsUp() {
+					proc.Start()
+				}
+			}
 		} else if !m.NoAutoStart {
 			m.manager.StartAutoStart()
 		}
