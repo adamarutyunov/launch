@@ -2,11 +2,11 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/adamarutyunov/launch/internal/process"
 	"github.com/charmbracelet/lipgloss"
-
 )
 
 const sidebarWidth = 32
@@ -38,22 +38,22 @@ var (
 
 	selectedItemStyle = lipgloss.NewStyle().
 				Background(colorSelectedBg).
-				Width(sidebarWidth - 2).
+				Width(sidebarWidth).
 				Padding(0, 1)
 
 	normalItemStyle = lipgloss.NewStyle().
-			Width(sidebarWidth - 2).
+			Width(sidebarWidth).
 			Padding(0, 1)
 
 	groupHeaderStyle = lipgloss.NewStyle().
 				Foreground(colorGroup).
 				Bold(true).
-				Width(sidebarWidth - 2).
+				Width(sidebarWidth).
 				Padding(0, 1)
 
 	sectionHeaderStyle = lipgloss.NewStyle().
 				Foreground(colorDim).
-				Width(sidebarWidth - 2).
+				Width(sidebarWidth).
 				Padding(0, 1)
 
 	titleStyle = lipgloss.NewStyle().
@@ -103,12 +103,17 @@ func taskDot(status process.Status, bg *lipgloss.AdaptiveColor) string {
 	}
 }
 
-func processDot(status process.Status, bg *lipgloss.AdaptiveColor) string {
+func spinnerGlyph(frame int) string {
+	frames := []string{"◐", "◓", "◑", "◒"}
+	return frames[frame%len(frames)]
+}
+
+func processDot(status process.Status, spinnerFrame int, bg *lipgloss.AdaptiveColor) string {
 	switch status {
 	case process.StatusRunning:
 		return dot(colorRunning, "●", bg)
 	case process.StatusStarting:
-		return dot(colorStarting, "◐", bg)
+		return dot(colorStarting, spinnerGlyph(spinnerFrame), bg)
 	case process.StatusQueued:
 		return dot(colorQueued, "◔", bg)
 	case process.StatusCrashed:
@@ -119,8 +124,18 @@ func processDot(status process.Status, bg *lipgloss.AdaptiveColor) string {
 }
 
 func (m Model) renderSidebar() string {
-	title := titleStyle.Render(m.title)
-	content := title + "\n" + m.sidebarViewport.View()
+	content := m.sidebarViewport.View()
+	if strings.TrimSpace(m.title) != "" {
+		title := titleStyle.Render(m.title)
+		content = title + "\n" + content
+	}
+	if m.NoLogs {
+		return lipgloss.NewStyle().
+			Width(m.sidebarFrameWidth()).
+			Height(max(1, m.height-m.footerLineCount())).
+			Padding(1, 0).
+			Render(content)
+	}
 	return sidebarStyle.Height(m.height - 2).Render(content)
 }
 
@@ -205,13 +220,31 @@ func (m Model) renderLogPane() string {
 }
 
 func (m Model) renderFooter() string {
-	help := "  ↑/↓ select • enter collapse • s/space start/stop • A start all • S stop all • r restart • h hide • H show hidden • c clear • q detach • Q quit"
+	quitKey := "Q"
+	if !m.NoLogs {
+		quitKey = "Q/ctrl+c"
+	}
+	help := buildShortcutHelp(
+		shortcutItem{key: "↑/↓", action: "select"},
+		shortcutItem{key: "enter", action: "collapse"},
+		shortcutItem{key: "s/space", action: "start/stop"},
+		shortcutItem{key: "A", action: joinShortcutWords("start", "all")},
+		shortcutItem{key: "S", action: joinShortcutWords("stop", "all")},
+		shortcutItem{key: "r", action: "restart"},
+		shortcutItem{key: "h", action: "hide"},
+		shortcutItem{key: "H", action: joinShortcutWords("show", "hidden")},
+		shortcutItem{key: "c", action: "clear"},
+		shortcutItem{key: "q", action: "detach"},
+		shortcutItem{key: quitKey, action: "quit"},
+	)
 	if m.showHiddenTasks {
 		help += " [showing hidden]"
 	}
-	left := helpStyle.Render(help)
-	right := helpStyle.Align(lipgloss.Right).
-		Width(m.width - lipgloss.Width(left)).
-		Render(m.manager.Summary())
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+	if m.width <= 0 {
+		return helpStyle.Render(help)
+	}
+	if m.width < 50 && !m.showFooterHelp {
+		return helpStyle.Width(max(1, m.width)).Render("  ?: shortcuts")
+	}
+	return helpStyle.Width(max(1, m.width)).Render(help)
 }
