@@ -29,6 +29,7 @@ type Model struct {
 	width, height   int
 	ready           bool
 	autoScroll      bool
+	spinnerFrame    int
 	title           string
 	multiGroup      bool
 	ExitMode        ExitMode
@@ -41,6 +42,49 @@ type Model struct {
 	startDialog     *startDialogState
 	NoAutoStart     bool
 	ForceAutoStart  bool
+	NoLogs          bool
+	showFooterHelp  bool
+}
+
+func (m Model) footerLineCount() int {
+	if m.width <= 0 {
+		return 1
+	}
+	return strings.Count(m.renderFooter(), "\n") + 1
+}
+
+func (m Model) sidebarContentWidth() int {
+	if m.NoLogs {
+		return max(1, m.width)
+	}
+	return sidebarWidth
+}
+
+func (m Model) sidebarFrameWidth() int {
+	if m.NoLogs {
+		return max(1, m.width)
+	}
+	return sidebarWidth
+}
+
+func (m Model) sidebarRowWidth() int {
+	if m.NoLogs {
+		return max(1, m.sidebarContentWidth())
+	}
+	return sidebarWidth
+}
+
+func (m Model) sidebarHeight() int {
+	titleHeight := 0
+	if strings.TrimSpace(m.title) != "" {
+		titleRendered := titleStyle.Render(m.title)
+		titleHeight = strings.Count(titleRendered, "\n") + 1
+	}
+	h := m.height - m.footerLineCount() - 2 - titleHeight
+	if h < 1 {
+		return 1
+	}
+	return h
 }
 
 func NewModel(manager *process.Manager, title string, settings *state.UserSettings) Model {
@@ -131,6 +175,9 @@ func (m *Model) saveSettings() {
 }
 
 type clearAlertMsg struct{}
+type spinnerTickMsg struct{}
+
+const spinnerTickInterval = 120 * time.Millisecond
 
 func (m *Model) setAlert(text string) tea.Cmd {
 	m.alert = text
@@ -140,8 +187,23 @@ func (m *Model) setAlert(text string) tea.Cmd {
 	})
 }
 
+func spinnerTickCmd() tea.Cmd {
+	return tea.Tick(spinnerTickInterval, func(t time.Time) tea.Msg {
+		return spinnerTickMsg{}
+	})
+}
+
+func (m Model) hasSpinningItems() bool {
+	for _, item := range m.manager.Items {
+		if item.Kind() == process.KindProcess && item.GetStatus() == process.StatusStarting {
+			return true
+		}
+	}
+	return false
+}
+
 func (m Model) Init() tea.Cmd {
-	return func() tea.Msg {
+	return tea.Batch(func() tea.Msg {
 		if m.SavedSession != nil {
 			m.manager.ReattachFromState(m.SavedSession)
 		} else if m.ForceAutoStart {
@@ -154,7 +216,7 @@ func (m Model) Init() tea.Cmd {
 			m.manager.StartAutoStart()
 		}
 		return nil
-	}
+	}, spinnerTickCmd())
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -164,6 +226,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.alert = ""
 		}
 		return m, nil
+
+	case spinnerTickMsg:
+		if !m.hasSpinningItems() {
+			return m, spinnerTickCmd()
+		}
+		m.spinnerFrame = (m.spinnerFrame + 1) % 4
+		m.updateSidebarContent()
+		m.updateViewportContent()
+		return m, spinnerTickCmd()
 
 	case process.AlertMsg:
 		cmd := m.setAlert(msg.Text)
@@ -183,22 +254,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 
 		logWidth := m.width - sidebarWidth - 3
-		logHeight := m.height - 4
-
-		titleRendered := titleStyle.Render(m.title)
-		titleHeight := strings.Count(titleRendered, "\n") + 1
-		sidebarListHeight := m.height - 4 - titleHeight
+		if m.NoLogs {
+			logWidth = 0
+		}
+		logHeight := m.height - m.footerLineCount() - 3
+		if logHeight < 1 {
+			logHeight = 1
+		}
 
 		if !m.ready {
 			m.viewport = viewport.New(logWidth, logHeight)
 			m.viewport.Style = lipgloss.NewStyle()
-			m.sidebarViewport = viewport.New(sidebarWidth-2, sidebarListHeight)
+			m.sidebarViewport = viewport.New(m.sidebarContentWidth(), m.sidebarHeight())
 			m.ready = true
 		} else {
 			m.viewport.Width = logWidth
 			m.viewport.Height = logHeight
-			m.sidebarViewport.Width = sidebarWidth - 2
-			m.sidebarViewport.Height = sidebarListHeight
+			m.sidebarViewport.Width = m.sidebarContentWidth()
+			m.sidebarViewport.Height = m.sidebarHeight()
 		}
 		m.updateSidebarContent()
 		m.updateViewportContent()
@@ -215,7 +288,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ExitMode = ExitDetach
 			return m, tea.Quit
 
-		case "Q", "ctrl+c":
+		case "Q":
+			m.ExitMode = ExitKill
+			return m, tea.Quit
+
+		case "ctrl+c":
+			if m.NoLogs {
+				return m, nil
+			}
 			m.ExitMode = ExitKill
 			return m, tea.Quit
 
@@ -250,6 +330,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.updateViewportContent()
 			}
 			return m, nil
+
+		case "?":
+			if m.width < 50 {
+				m.showFooterHelp = !m.showFooterHelp
+				if m.ready {
+					m.sidebarViewport.Width = m.sidebarContentWidth()
+					m.sidebarViewport.Height = m.sidebarHeight()
+				}
+				m.updateSidebarContent()
+				return m, nil
+			}
 
 		case "h":
 			entry := m.selectedEntry()
@@ -411,6 +502,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateViewportContent()
 		}
 		_ = m.manager.SaveState()
+		if msg.Status == process.StatusStarting || m.hasSpinningItems() {
+			return m, spinnerTickCmd()
+		}
 		return m, nil
 	}
 
@@ -448,7 +542,7 @@ func (m *Model) updateSidebarContent() {
 			if m.multiGroup {
 				prefix = "    "
 			}
-			items = append(items, sectionHeaderStyle.Render(prefix+"Tasks"))
+			items = append(items, sectionHeaderStyle.Width(m.sidebarRowWidth()).Render(prefix+"Tasks"))
 			continue
 		}
 
@@ -461,17 +555,15 @@ func (m *Model) updateSidebarContent() {
 			if m.collapsedGroups[entry.Group] {
 				chevron = "▸"
 			}
-			var label string
+			label := fmt.Sprintf("%s %s", chevron, entry.Group)
 			if count != "" {
 				label = fmt.Sprintf("%s %s (%s)", chevron, entry.Group, count)
-			} else {
-				label = fmt.Sprintf("%s %s", chevron, entry.Group)
 			}
 			if i == selectedSidebarIdx {
 				selectedLine = len(items)
-				label = selectedItemStyle.Bold(true).Foreground(colorGroup).Render(label)
+				label = selectedItemStyle.Width(m.sidebarRowWidth()).Bold(true).Foreground(colorGroup).Render(label)
 			} else {
-				label = groupHeaderStyle.Render(label)
+				label = groupHeaderStyle.Width(m.sidebarRowWidth()).Render(label)
 			}
 			items = append(items, label)
 			continue
@@ -480,7 +572,7 @@ func (m *Model) updateSidebarContent() {
 		item := entry.Item
 		status := item.GetStatus()
 
-		prefix := "  "
+		prefix := ""
 		if m.multiGroup {
 			prefix = "    "
 		}
@@ -490,9 +582,9 @@ func (m *Model) updateSidebarContent() {
 			dimLabel := fmt.Sprintf("%s○ %s", prefix, item.GetTitle())
 			if i == selectedSidebarIdx {
 				selectedLine = len(items)
-				label = selectedItemStyle.Foreground(colorDim).Render(dimLabel)
+				label = selectedItemStyle.Width(m.sidebarRowWidth()).Foreground(colorDim).Render(dimLabel)
 			} else {
-				label = normalItemStyle.Foreground(colorDim).Render(dimLabel)
+				label = normalItemStyle.Width(m.sidebarRowWidth()).Foreground(colorDim).Render(dimLabel)
 			}
 		} else if i == selectedSidebarIdx {
 			selectedLine = len(items)
@@ -501,11 +593,11 @@ func (m *Model) updateSidebarContent() {
 			if item.Kind() == process.KindTask {
 				d = taskDot(status, &bg)
 			} else {
-				d = processDot(status, &bg)
+				d = processDot(status, m.spinnerFrame, &bg)
 			}
 			selStyle := lipgloss.NewStyle().Background(bg)
 			row := selStyle.Render(" "+prefix) + d + selStyle.Render(" "+item.GetTitle())
-			totalWidth := sidebarWidth - 2
+			totalWidth := m.sidebarRowWidth()
 			if vis := lipgloss.Width(row); vis < totalWidth {
 				row += selStyle.Render(strings.Repeat(" ", totalWidth-vis))
 			}
@@ -515,9 +607,9 @@ func (m *Model) updateSidebarContent() {
 			if item.Kind() == process.KindTask {
 				d = taskDot(status, nil)
 			} else {
-				d = processDot(status, nil)
+				d = processDot(status, m.spinnerFrame, nil)
 			}
-			label = normalItemStyle.Render(fmt.Sprintf("%s%s %s", prefix, d, item.GetTitle()))
+			label = normalItemStyle.Width(m.sidebarRowWidth()).Render(fmt.Sprintf("%s%s %s", prefix, d, item.GetTitle()))
 		}
 
 		items = append(items, label)
@@ -556,7 +648,7 @@ func (m *Model) updateViewportContent() {
 			case status == process.StatusRunning:
 				marker = lipgloss.NewStyle().Foreground(colorRunning).Render("●")
 			case item.Kind() == process.KindProcess && status == process.StatusStarting:
-				marker = lipgloss.NewStyle().Foreground(colorStarting).Render("◐")
+				marker = lipgloss.NewStyle().Foreground(colorStarting).Render(spinnerGlyph(m.spinnerFrame))
 			case item.Kind() == process.KindProcess && status == process.StatusQueued:
 				marker = lipgloss.NewStyle().Foreground(colorQueued).Render("◔")
 			case item.Kind() == process.KindProcess && status == process.StatusCrashed:
@@ -599,6 +691,9 @@ func (m Model) View() string {
 		return "Loading..."
 	}
 	sidebar := m.renderSidebar()
+	if m.NoLogs {
+		return lipgloss.JoinVertical(lipgloss.Left, sidebar, m.renderFooter())
+	}
 	logPane := m.renderLogPane()
 	main := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, logPane)
 	return lipgloss.JoinVertical(lipgloss.Left, main, m.renderFooter())

@@ -104,6 +104,8 @@ Drop a `Taskfile.yml` next to `launch.yml` and its tasks appear in the sidebar a
 | `q` | Detach (processes keep running) |
 | `Q` / `ctrl+c` | Kill all and exit |
 
+Run `launch --embed` to hide the logs pane and show only the control sidebar. In embed mode, `ctrl+c` is ignored by the app, so use `Q` to quit.
+
 ## Contributing
 
 Bug reports and pull requests are welcome at [github.com/adamarutyunov/launch](https://github.com/adamarutyunov/launch/issues).

@@ -21,6 +21,7 @@ func (n teaNotifier) Send(msg any) { n.prog.Send(msg) }
 func main() {
 	noAutoStart := flag.Bool("no-autostart", false, "skip auto-starting processes on launch")
 	forceAutoStart := flag.Bool("force-autostart", false, "force auto-start processes individually without dependency checks")
+	embed := flag.Bool("embed", false, "hide the logs pane and show only the control sidebar")
 	flag.Parse()
 	rootDir := "."
 	if flag.NArg() > 0 {
@@ -75,9 +76,14 @@ func main() {
 	}
 
 	settings := state.LoadSettings(absDir)
-	model := ui.NewModel(manager, "Launch "+Version, settings)
+	title := "Launch " + Version
+	if *embed {
+		title = ""
+	}
+	model := ui.NewModel(manager, title, settings)
 	model.NoAutoStart = *noAutoStart || *forceAutoStart
 	model.ForceAutoStart = *forceAutoStart
+	model.NoLogs = *embed
 
 	session, err := state.Load(absDir)
 	if err == nil && len(session.Processes) > 0 {
