@@ -129,7 +129,7 @@ func (m Model) renderSidebar() string {
 		title := titleStyle.Render(m.title)
 		content = title + "\n" + content
 	}
-	if m.NoLogs {
+	if m.Embed {
 		return lipgloss.NewStyle().
 			Width(m.sidebarFrameWidth()).
 			Height(max(1, m.height-m.footerLineCount())).
@@ -221,7 +221,7 @@ func (m Model) renderLogPane() string {
 
 func (m Model) renderFooter() string {
 	quitKey := "Q"
-	if !m.NoLogs {
+	if !m.Embed {
 		quitKey = "Q/ctrl+c"
 	}
 	help := buildShortcutHelp(

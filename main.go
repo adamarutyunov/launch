@@ -83,7 +83,7 @@ func main() {
 	model := ui.NewModel(manager, title, settings)
 	model.NoAutoStart = *noAutoStart || *forceAutoStart
 	model.ForceAutoStart = *forceAutoStart
-	model.NoLogs = *embed
+	model.Embed = *embed
 
 	session, err := state.Load(absDir)
 	if err == nil && len(session.Processes) > 0 {
