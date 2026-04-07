@@ -76,7 +76,7 @@ func main() {
 	}
 
 	settings := state.LoadSettings(absDir)
-	title := "Launch " + Version
+	title := "Launch " + Version + " (" + absDir + ")"
 	if *embed {
 		title = ""
 	}
