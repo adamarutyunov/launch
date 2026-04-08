@@ -4,7 +4,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"sync"
+	"syscall"
 
 	"github.com/adamarutyunov/launch/internal/config"
 	"github.com/adamarutyunov/launch/internal/process"
@@ -92,6 +95,20 @@ func main() {
 
 	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	manager.SetNotifier(teaNotifier{program})
+	var stopOnce sync.Once
+	stopAll := func() {
+		stopOnce.Do(func() {
+			manager.StopAll()
+		})
+	}
+	signalCh := make(chan os.Signal, 1)
+	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(signalCh)
+	go func() {
+		<-signalCh
+		stopAll()
+		program.Quit()
+	}()
 
 	finalModel, err := program.Run()
 	if err != nil {
@@ -107,10 +124,10 @@ func main() {
 			}
 			fmt.Println("Detached. Processes are still running. Run 'launch' again to reattach.")
 		case ui.ExitKill:
-			manager.StopAll()
+			stopAll()
 			fmt.Println("All processes stopped.")
 		}
 	} else {
-		manager.StopAll()
+		stopAll()
 	}
 }

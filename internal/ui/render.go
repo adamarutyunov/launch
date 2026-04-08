@@ -90,10 +90,10 @@ func dot(fg lipgloss.TerminalColor, char string, bg *lipgloss.AdaptiveColor) str
 	return s.Render(char)
 }
 
-func taskDot(status process.Status, bg *lipgloss.AdaptiveColor) string {
+func taskDot(status process.Status, spinnerFrame int, bg *lipgloss.AdaptiveColor) string {
 	switch status {
 	case process.StatusRunning:
-		return dot(colorTaskRunning, "●", bg)
+		return dot(colorTaskRunning, spinnerGlyph(spinnerFrame), bg)
 	case process.StatusSucceeded:
 		return dot(colorSucceeded, "●", bg)
 	case process.StatusFailed:

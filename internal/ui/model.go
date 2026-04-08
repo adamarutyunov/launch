@@ -196,7 +196,11 @@ func spinnerTickCmd() tea.Cmd {
 
 func (m Model) hasSpinningItems() bool {
 	for _, item := range m.manager.Items {
-		if item.Kind() == process.KindProcess && item.GetStatus() == process.StatusStarting {
+		status := item.GetStatus()
+		if item.Kind() == process.KindProcess && status == process.StatusStarting {
+			return true
+		}
+		if item.Kind() == process.KindTask && status == process.StatusRunning {
 			return true
 		}
 	}
@@ -429,7 +433,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				switch concrete := item.(type) {
 				case *process.ManagedProcess:
-					if status == process.StatusCrashed || status == process.StatusQueued {
+					if status == process.StatusQueued {
 						_ = concrete.Stop()
 						return nil
 					}
@@ -538,7 +542,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateViewportContent()
 		}
 		_ = m.manager.SaveState()
-		if !m.spinnerActive && (msg.Status == process.StatusStarting || m.hasSpinningItems()) {
+		if !m.spinnerActive && (msg.Status == process.StatusStarting || msg.Status == process.StatusRunning || m.hasSpinningItems()) {
 			m.spinnerActive = true
 			return m, spinnerTickCmd()
 		}
@@ -628,7 +632,7 @@ func (m *Model) updateSidebarContent() {
 			bg := colorSelectedBg
 			var d string
 			if item.Kind() == process.KindTask {
-				d = taskDot(status, &bg)
+				d = taskDot(status, m.spinnerFrame, &bg)
 			} else {
 				d = processDot(status, m.spinnerFrame, &bg)
 			}
@@ -642,7 +646,7 @@ func (m *Model) updateSidebarContent() {
 		} else {
 			var d string
 			if item.Kind() == process.KindTask {
-				d = taskDot(status, nil)
+				d = taskDot(status, m.spinnerFrame, nil)
 			} else {
 				d = processDot(status, m.spinnerFrame, nil)
 			}
@@ -681,7 +685,7 @@ func (m *Model) updateViewportContent() {
 			var marker string
 			switch {
 			case status == process.StatusRunning && item.Kind() == process.KindTask:
-				marker = lipgloss.NewStyle().Foreground(colorTaskRunning).Render("●")
+				marker = lipgloss.NewStyle().Foreground(colorTaskRunning).Render(spinnerGlyph(m.spinnerFrame))
 			case status == process.StatusRunning:
 				marker = lipgloss.NewStyle().Foreground(colorRunning).Render("●")
 			case item.Kind() == process.KindProcess && status == process.StatusStarting:
