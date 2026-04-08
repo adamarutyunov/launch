@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- Launch now stops all managed processes when the TUI receives `SIGTERM`, `SIGINT`, or `SIGHUP`, preventing orphaned services when the hosting tmux pane is killed or respawned unexpectedly
+
 ## [1.0.2] - 2026-03-23
 
 ### Fixed

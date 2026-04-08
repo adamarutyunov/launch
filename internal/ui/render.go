@@ -90,10 +90,10 @@ func dot(fg lipgloss.TerminalColor, char string, bg *lipgloss.AdaptiveColor) str
 	return s.Render(char)
 }
 
-func taskDot(status process.Status, bg *lipgloss.AdaptiveColor) string {
+func taskDot(status process.Status, spinnerFrame int, bg *lipgloss.AdaptiveColor) string {
 	switch status {
 	case process.StatusRunning:
-		return dot(colorTaskRunning, "●", bg)
+		return dot(colorTaskRunning, spinnerGlyph(spinnerFrame), bg)
 	case process.StatusSucceeded:
 		return dot(colorSucceeded, "●", bg)
 	case process.StatusFailed:
@@ -129,7 +129,7 @@ func (m Model) renderSidebar() string {
 		title := titleStyle.Render(m.title)
 		content = title + "\n" + content
 	}
-	if m.NoLogs {
+	if m.Embed {
 		return lipgloss.NewStyle().
 			Width(m.sidebarFrameWidth()).
 			Height(max(1, m.height-m.footerLineCount())).
@@ -221,7 +221,7 @@ func (m Model) renderLogPane() string {
 
 func (m Model) renderFooter() string {
 	quitKey := "Q"
-	if !m.NoLogs {
+	if !m.Embed {
 		quitKey = "Q/ctrl+c"
 	}
 	help := buildShortcutHelp(

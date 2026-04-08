@@ -30,6 +30,7 @@ type Model struct {
 	ready           bool
 	autoScroll      bool
 	spinnerFrame    int
+	spinnerActive   bool
 	title           string
 	multiGroup      bool
 	ExitMode        ExitMode
@@ -42,7 +43,7 @@ type Model struct {
 	startDialog     *startDialogState
 	NoAutoStart     bool
 	ForceAutoStart  bool
-	NoLogs          bool
+	Embed           bool
 	showFooterHelp  bool
 }
 
@@ -54,21 +55,21 @@ func (m Model) footerLineCount() int {
 }
 
 func (m Model) sidebarContentWidth() int {
-	if m.NoLogs {
+	if m.Embed {
 		return max(1, m.width)
 	}
 	return sidebarWidth
 }
 
 func (m Model) sidebarFrameWidth() int {
-	if m.NoLogs {
+	if m.Embed {
 		return max(1, m.width)
 	}
 	return sidebarWidth
 }
 
 func (m Model) sidebarRowWidth() int {
-	if m.NoLogs {
+	if m.Embed {
 		return max(1, m.sidebarContentWidth())
 	}
 	return sidebarWidth
@@ -195,15 +196,41 @@ func spinnerTickCmd() tea.Cmd {
 
 func (m Model) hasSpinningItems() bool {
 	for _, item := range m.manager.Items {
-		if item.Kind() == process.KindProcess && item.GetStatus() == process.StatusStarting {
+		status := item.GetStatus()
+		if item.Kind() == process.KindProcess && status == process.StatusStarting {
+			return true
+		}
+		if item.Kind() == process.KindTask && status == process.StatusRunning {
 			return true
 		}
 	}
 	return false
 }
 
+func (m Model) startProcesses(processes []*process.ManagedProcess) {
+	if !m.Embed {
+		m.manager.StartBatch(processes)
+		return
+	}
+	for _, proc := range processes {
+		status := proc.Status()
+		if !status.IsUp() && status != process.StatusQueued {
+			_ = proc.Start()
+		}
+	}
+}
+
+func (m Model) startGroup(group string) {
+	for _, task := range m.manager.Tasks {
+		if task.Group == group && !task.GetStatus().IsUp() {
+			_ = task.Start()
+		}
+	}
+	m.startProcesses(m.manager.ProcessesInGroup(group))
+}
+
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(func() tea.Msg {
+	return func() tea.Msg {
 		if m.SavedSession != nil {
 			m.manager.ReattachFromState(m.SavedSession)
 		} else if m.ForceAutoStart {
@@ -216,7 +243,7 @@ func (m Model) Init() tea.Cmd {
 			m.manager.StartAutoStart()
 		}
 		return nil
-	}, spinnerTickCmd())
+	}
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -228,8 +255,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case spinnerTickMsg:
+		if !m.spinnerActive {
+			return m, nil
+		}
 		if !m.hasSpinningItems() {
-			return m, spinnerTickCmd()
+			m.spinnerActive = false
+			return m, nil
 		}
 		m.spinnerFrame = (m.spinnerFrame + 1) % 4
 		m.updateSidebarContent()
@@ -241,6 +272,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case showStartDialogMsg:
+		if m.Embed {
+			return m, func() tea.Msg {
+				_ = msg.process.Start()
+				return nil
+			}
+		}
 		tree := m.manager.DependencyTree(msg.process)
 		m.startDialog = &startDialogState{
 			process:        msg.process,
@@ -254,7 +291,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 
 		logWidth := m.width - sidebarWidth - 3
-		if m.NoLogs {
+		if m.Embed {
 			logWidth = 0
 		}
 		logHeight := m.height - m.footerLineCount() - 3
@@ -293,7 +330,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "ctrl+c":
-			if m.NoLogs {
+			if m.Embed {
 				return m, nil
 			}
 			m.ExitMode = ExitKill
@@ -382,7 +419,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if anyUp {
 						manager.StopGroup(group)
 					} else {
-						manager.StartGroup(group)
+						m.startGroup(group)
 					}
 					return nil
 				}
@@ -396,15 +433,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				switch concrete := item.(type) {
 				case *process.ManagedProcess:
-					if status == process.StatusCrashed || status == process.StatusQueued {
+					if status == process.StatusQueued {
 						_ = concrete.Stop()
+						return nil
+					}
+					if m.Embed {
+						_ = concrete.Start()
 						return nil
 					}
 					unmet := manager.CheckDependencies(concrete)
 					if len(unmet) > 0 {
 						return showStartDialogMsg{process: concrete}
 					}
-					manager.StartBatch([]*process.ManagedProcess{concrete})
+					m.startProcesses([]*process.ManagedProcess{concrete})
 				case *process.ManagedTask:
 					_ = concrete.Start()
 				}
@@ -419,9 +460,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "A":
-			manager := m.manager
 			return m, func() tea.Msg {
-				manager.StartBatch(manager.Processes)
+				m.startProcesses(m.manager.Processes)
 				return nil
 			}
 
@@ -436,7 +476,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, func() tea.Msg {
 					manager.StopGroup(group)
 					time.Sleep(500 * time.Millisecond)
-					manager.StartGroup(group)
+					m.startGroup(group)
 					return nil
 				}
 			}
@@ -446,7 +486,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				time.Sleep(500 * time.Millisecond)
 				switch concrete := item.(type) {
 				case *process.ManagedProcess:
-					manager.StartBatch([]*process.ManagedProcess{concrete})
+					m.startProcesses([]*process.ManagedProcess{concrete})
 				case *process.ManagedTask:
 					_ = concrete.Start()
 				}
@@ -502,7 +542,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateViewportContent()
 		}
 		_ = m.manager.SaveState()
-		if msg.Status == process.StatusStarting || m.hasSpinningItems() {
+		if !m.spinnerActive && (msg.Status == process.StatusStarting || msg.Status == process.StatusRunning || m.hasSpinningItems()) {
+			m.spinnerActive = true
 			return m, spinnerTickCmd()
 		}
 		return m, nil
@@ -591,7 +632,7 @@ func (m *Model) updateSidebarContent() {
 			bg := colorSelectedBg
 			var d string
 			if item.Kind() == process.KindTask {
-				d = taskDot(status, &bg)
+				d = taskDot(status, m.spinnerFrame, &bg)
 			} else {
 				d = processDot(status, m.spinnerFrame, &bg)
 			}
@@ -605,7 +646,7 @@ func (m *Model) updateSidebarContent() {
 		} else {
 			var d string
 			if item.Kind() == process.KindTask {
-				d = taskDot(status, nil)
+				d = taskDot(status, m.spinnerFrame, nil)
 			} else {
 				d = processDot(status, m.spinnerFrame, nil)
 			}
@@ -644,7 +685,7 @@ func (m *Model) updateViewportContent() {
 			var marker string
 			switch {
 			case status == process.StatusRunning && item.Kind() == process.KindTask:
-				marker = lipgloss.NewStyle().Foreground(colorTaskRunning).Render("●")
+				marker = lipgloss.NewStyle().Foreground(colorTaskRunning).Render(spinnerGlyph(m.spinnerFrame))
 			case status == process.StatusRunning:
 				marker = lipgloss.NewStyle().Foreground(colorRunning).Render("●")
 			case item.Kind() == process.KindProcess && status == process.StatusStarting:
@@ -691,7 +732,7 @@ func (m Model) View() string {
 		return "Loading..."
 	}
 	sidebar := m.renderSidebar()
-	if m.NoLogs {
+	if m.Embed {
 		return lipgloss.JoinVertical(lipgloss.Left, sidebar, m.renderFooter())
 	}
 	logPane := m.renderLogPane()
